@@ -107,3 +107,29 @@ def test_full_five_feature_extreme_anomaly():
         res["models"]["autoencoder"]["label"]
     ]
     assert votes.count(-1) >= 2
+
+
+def test_health_endpoints():
+    """Verify that /, /health, /healthz, and /api/v1/health return 200 OK."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    for path in ["/", "/health", "/healthz", "/api/v1/health"]:
+        resp = client.get(path)
+        assert resp.status_code == 200
+        assert "status" in resp.json() or "message" in resp.json()
+
+
+def test_readiness_endpoint():
+    """Verify that /ready returns models and database status."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    resp = client.get("/ready")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "status" in data
+    assert "models" in data
+    assert data["models"] == "all_loaded"

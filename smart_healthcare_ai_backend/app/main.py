@@ -15,12 +15,41 @@ def root():
         "message": "Smart Healthcare Monitoring API is running",
         "docs": "/docs",
         "health": "/health",
+        "readiness": "/ready",
         "model_status": "/api/v1/model/status"
     }
 
 @app.get("/health")
+@app.get("/healthz")
+@app.get("/api/v1/health")
 def health():
+    """Liveness probe: returns 200 OK as long as the FastAPI process is responsive."""
     return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
+
+@app.get("/health/ready")
+@app.get("/ready")
+def readiness():
+    """Readiness probe: checks database connectivity and pre-trained AI model availability."""
+    db_ok = False
+    db_err = None
+    try:
+        db = require_db()
+        db.execute(text("SELECT 1")).scalar()
+        db.close()
+        db_ok = True
+    except Exception as e:
+        db_err = str(e)
+
+    models_info = get_models_status()
+    models_ok = models_info.get("all_loaded", False)
+    all_ready = db_ok and models_ok
+
+    return {
+        "status": "ready" if all_ready else "degraded",
+        "database": "connected" if db_ok else f"disconnected ({db_err})",
+        "models": "all_loaded" if models_ok else "partial_or_missing",
+        "time": datetime.now(timezone.utc).isoformat()
+    }
 
 @app.get("/api/v1/model/status")
 def model_status():
