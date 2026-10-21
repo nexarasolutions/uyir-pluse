@@ -1,0 +1,21 @@
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# Secrets and environment configurations (NEVER commit credentials)
+.env
+*.env
+smart_healthcare_ai_backend/.env
+
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Backup files
+*.bak
+
+# macOS artifacts
+.DS_Store
