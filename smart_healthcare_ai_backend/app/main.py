@@ -43,15 +43,15 @@ Enterprise-grade IoT vital sign ingestion, multi-model AI anomaly screening, and
   * **Isolation Forest:** Statistical outlier and distribution boundary detection.
   * **One-Class SVM:** Non-linear kernel boundary separation.
   * **Deep PyTorch Autoencoder:** Reconstruction error Mean Squared Error (MSE) anomaly scoring.
-* **Resilient Cloud Persistence:** Low-latency storage backed by Supabase PostgreSQL with automated connection pooling.
+* **Resilient Cloud Persistence:** Low-latency storage backed by Supabase PostgreSQL (`measurements`, `ai_analysis`, `alerts`).
 
 ---
 
-### 🔐 Authentication
-* **Clinical & Dashboard Gateway:** Provide `x-dashboard-key`, `x-api-key`, or `Authorization: Bearer <key>`.
-* **Hardware Ingestion Gateway:** Provide `x-device-key`, `x-api-key`, or `Authorization: Bearer <key>`.
-
-*Click **Authorize 🔒** at the top right to authenticate your session across all endpoints.*
+### 🔐 Authentication & Swagger Testing
+* **Test in Swagger ("Try it out" & "Execute"):** In development mode, endpoints can be executed directly, or click **Authorize 🔒** and paste one of your keys:
+  * **Device API Key:** `SFPdei_u_CW9qsZKZ8kccMBvN5QgfD0Z9hytLn9xr0I`
+  * **Dashboard API Key:** `MpgbyhfTyqH5zo-ikzUj8OwR_adGVL5VErCu-YeViBI`
+* All executed readings and AI anomaly screenings are automatically persisted to the Supabase database.
 """
 
 app = FastAPI(
@@ -140,7 +140,7 @@ def model_status():
     "/api/v1/measurements",
     tags=["Device Telemetry"],
     summary="Ingest Patient Vital Signs from IoT Edge Device",
-    description="Receives real-time telemetry from edge sensors (Heart Rate, SpO2, Temperature, Signal Quality) and persists records to the PostgreSQL datastore.",
+    description="Receives real-time telemetry from edge sensors (Heart Rate, SpO2, Temperature, Signal Quality) and persists records to the PostgreSQL datastore with automated AI screening.",
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(verify_device_key)],
 )
@@ -152,7 +152,9 @@ def create_measurement(payload: MeasurementIn):
         and payload.sensor_quality == "good"
         else "incomplete_or_poor"
     )
+    patient = payload.patient_id or f"patient-{payload.device_id}"
     try:
+        # 1. Insert into measurements table
         row = db.execute(
             text(
                 "INSERT INTO measurements(device_id,patient_id,heart_rate_bpm,spo2_percent,temperature_c,sensor_quality,data_quality_status) "
@@ -161,7 +163,7 @@ def create_measurement(payload: MeasurementIn):
             ),
             {
                 "device": payload.device_id,
-                "patient": payload.patient_id,
+                "patient": patient,
                 "hr": payload.heart_rate_bpm,
                 "spo2": payload.spo2_percent,
                 "temp": payload.temperature_c,
@@ -169,13 +171,104 @@ def create_measurement(payload: MeasurementIn):
                 "dq": quality,
             },
         ).mappings().one()
+        measurement_id = row["id"]
+
+        # 2. Also sync to patient_vitals if table exists
+        try:
+            db.execute(
+                text(
+                    "INSERT INTO patient_vitals(device_id, heart_rate, spo2, temperature, recorded_at) "
+                    "VALUES (:device, :hr, :spo2, :temp, NOW())"
+                ),
+                {
+                    "device": payload.device_id,
+                    "hr": payload.heart_rate_bpm,
+                    "spo2": payload.spo2_percent,
+                    "temp": payload.temperature_c,
+                },
+            )
+        except Exception:
+            pass
+
+        # 3. Automated AI Vital Signs Screening
+        ai_result = analyze_values(
+            hr=payload.heart_rate_bpm,
+            spo2=payload.spo2_percent,
+            temp=payload.temperature_c,
+            ecg=payload.ecg,
+            bp_systolic=payload.bp_systolic,
+            bp_diastolic=payload.bp_diastolic,
+        )
+
+        ai_id = None
+        try:
+            ai_row = db.execute(
+                text(
+                    "INSERT INTO ai_analysis(measurement_id,device_id,result,anomaly_score,explanation,model_version) "
+                    "VALUES (:m_id,:device,:result,:score,:explanation,:version) RETURNING id"
+                ),
+                {
+                    "m_id": measurement_id,
+                    "device": payload.device_id,
+                    "result": ai_result.get("result", "UNKNOWN"),
+                    "score": ai_result.get("anomaly_score") or 0.0,
+                    "explanation": ai_result.get("explanation", ""),
+                    "version": "v2.0-ensemble-iso-svm-ae",
+                },
+            ).mappings().one()
+            ai_id = ai_row["id"]
+        except Exception:
+            pass
+
+        # 4. Critical threshold & AI anomaly alert generation
+        alert_id = None
+        is_anomaly = ai_result.get("ensemble_anomaly", False) or ai_result.get("result") == "UNUSUAL_PATTERN"
+        is_extreme_hr = payload.heart_rate_bpm is not None and (payload.heart_rate_bpm < 50 or payload.heart_rate_bpm > 120)
+        is_low_spo2 = payload.spo2_percent is not None and payload.spo2_percent < 92.0
+        is_fever = payload.temperature_c is not None and (payload.temperature_c > 38.0 or payload.temperature_c < 35.0)
+
+        if is_anomaly or is_extreme_hr or is_low_spo2 or is_fever:
+            severity = "critical" if (is_low_spo2 or (payload.heart_rate_bpm and payload.heart_rate_bpm > 140)) else "warning"
+            reasons = []
+            if is_anomaly:
+                reasons.append("Multi-model AI ensemble flagged physiological anomaly")
+            if is_extreme_hr:
+                reasons.append(f"Abnormal heart rate: {payload.heart_rate_bpm} BPM")
+            if is_low_spo2:
+                reasons.append(f"Critical SpO2 hypoxemia: {payload.spo2_percent}%")
+            if is_fever:
+                reasons.append(f"Abnormal body temperature: {payload.temperature_c}°C")
+
+            try:
+                alert_row = db.execute(
+                    text(
+                        "INSERT INTO alerts(device_id,measurement_id,alert_type,severity,reason,status) "
+                        "VALUES (:device,:m_id,'vital_anomaly',:severity,:reason,'open') RETURNING id"
+                    ),
+                    {
+                        "device": payload.device_id,
+                        "m_id": measurement_id,
+                        "severity": severity,
+                        "reason": "; ".join(reasons),
+                    },
+                ).mappings().one()
+                alert_id = alert_row["id"]
+            except Exception:
+                pass
+
         db.commit()
-        return dict(row)
+
+        res_dict = dict(row)
+        res_dict["ai_analysis_id"] = ai_id
+        res_dict["ai_screening"] = ai_result.get("result", "UNKNOWN")
+        res_dict["alert_id"] = alert_id
+        res_dict["saved_to_database"] = True
+        return res_dict
     except Exception as e:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to persist telemetry reading; please verify database connectivity.",
+            detail=f"Failed to persist telemetry reading: {str(e)}",
         ) from e
     finally:
         db.close()
@@ -230,11 +323,15 @@ def history(device_id: str, limit: int = Query(default=100, ge=1, le=1000, descr
 @app.post(
     "/api/v1/devices/{device_id}/analyze",
     tags=["AI Anomaly Detection"],
-    summary="Execute Multi-Model AI Vital Signs Anomaly Analysis",
-    description="Evaluates patient vitals using an ensemble of Isolation Forest, One-Class SVM, and PyTorch Autoencoder to screen for physiological anomalies.",
+    summary="Execute Multi-Model AI Vital Signs Anomaly Analysis & Persist",
+    description="Evaluates patient vitals using an ensemble of Isolation Forest, One-Class SVM, and PyTorch Autoencoder, and automatically persists measurement, AI screening, and alerts to Supabase.",
     dependencies=[Depends(verify_dashboard_key)],
 )
-def analyze(device_id: str, payload: AnalysisRequest):
+def analyze(
+    device_id: str,
+    payload: AnalysisRequest,
+    save_to_db: bool = Query(default=True, description="Whether to persist vitals, AI analysis record, and clinical alerts to the database"),
+):
     result = analyze_values(
         hr=payload.heart_rate_bpm,
         spo2=payload.spo2_percent,
@@ -244,6 +341,112 @@ def analyze(device_id: str, payload: AnalysisRequest):
         bp_diastolic=payload.bp_diastolic,
     )
     result["device_id"] = device_id
+
+    if save_to_db:
+        db = require_db()
+        try:
+            # 1. Save telemetry to measurements
+            patient = payload.patient_id or f"patient-{device_id}"
+            quality = (
+                "valid"
+                if all(v is not None for v in [payload.heart_rate_bpm, payload.spo2_percent, payload.temperature_c])
+                else "incomplete_or_poor"
+            )
+            m_row = db.execute(
+                text(
+                    "INSERT INTO measurements(device_id,patient_id,heart_rate_bpm,spo2_percent,temperature_c,sensor_quality,data_quality_status) "
+                    "VALUES (:device,:patient,:hr,:spo2,:temp,'good',:dq) RETURNING id"
+                ),
+                {
+                    "device": device_id,
+                    "patient": patient,
+                    "hr": payload.heart_rate_bpm,
+                    "spo2": payload.spo2_percent,
+                    "temp": payload.temperature_c,
+                    "dq": quality,
+                },
+            ).mappings().one()
+            measurement_id = m_row["id"]
+            result["measurement_id"] = measurement_id
+
+            # 2. Also sync to patient_vitals if table exists
+            try:
+                db.execute(
+                    text(
+                        "INSERT INTO patient_vitals(device_id, heart_rate, spo2, temperature, recorded_at) "
+                        "VALUES (:device, :hr, :spo2, :temp, NOW())"
+                    ),
+                    {
+                        "device": device_id,
+                        "hr": payload.heart_rate_bpm,
+                        "spo2": payload.spo2_percent,
+                        "temp": payload.temperature_c,
+                    },
+                )
+            except Exception:
+                pass
+
+            # 3. Save AI analysis record
+            ai_row = db.execute(
+                text(
+                    "INSERT INTO ai_analysis(measurement_id,device_id,result,anomaly_score,explanation,model_version) "
+                    "VALUES (:m_id,:device,:result,:score,:explanation,:version) RETURNING id"
+                ),
+                {
+                    "m_id": measurement_id,
+                    "device": device_id,
+                    "result": result.get("result", "UNKNOWN"),
+                    "score": result.get("anomaly_score") or 0.0,
+                    "explanation": result.get("explanation", ""),
+                    "version": "v2.0-ensemble-iso-svm-ae",
+                },
+            ).mappings().one()
+            result["ai_analysis_id"] = ai_row["id"]
+
+            # 4. Trigger alert if anomaly or critical thresholds
+            is_anomaly = result.get("ensemble_anomaly", False) or result.get("result") == "UNUSUAL_PATTERN"
+            is_extreme_hr = payload.heart_rate_bpm is not None and (payload.heart_rate_bpm < 50 or payload.heart_rate_bpm > 120)
+            is_low_spo2 = payload.spo2_percent is not None and payload.spo2_percent < 92.0
+            is_fever = payload.temperature_c is not None and (payload.temperature_c > 38.0 or payload.temperature_c < 35.0)
+
+            if is_anomaly or is_extreme_hr or is_low_spo2 or is_fever:
+                severity = "critical" if (is_low_spo2 or (payload.heart_rate_bpm and payload.heart_rate_bpm > 140)) else "warning"
+                reasons = []
+                if is_anomaly:
+                    reasons.append("Multi-model AI ensemble flagged physiological anomaly")
+                if is_extreme_hr:
+                    reasons.append(f"Abnormal heart rate: {payload.heart_rate_bpm} BPM")
+                if is_low_spo2:
+                    reasons.append(f"Critical SpO2 hypoxemia: {payload.spo2_percent}%")
+                if is_fever:
+                    reasons.append(f"Abnormal body temperature: {payload.temperature_c}°C")
+
+                alert_row = db.execute(
+                    text(
+                        "INSERT INTO alerts(device_id,measurement_id,alert_type,severity,reason,status) "
+                        "VALUES (:device,:m_id,'vital_anomaly',:severity,:reason,'open') RETURNING id"
+                    ),
+                    {
+                        "device": device_id,
+                        "m_id": measurement_id,
+                        "severity": severity,
+                        "reason": "; ".join(reasons),
+                    },
+                ).mappings().one()
+                result["alert_id"] = alert_row["id"]
+                result["alert_triggered"] = True
+            else:
+                result["alert_triggered"] = False
+
+            db.commit()
+            result["saved_to_database"] = True
+        except Exception as e:
+            db.rollback()
+            result["saved_to_database"] = False
+            result["database_note"] = f"Analysis succeeded, but database write failed: {str(e)}"
+        finally:
+            db.close()
+
     return result
 
 

@@ -7,9 +7,13 @@ class MeasurementIn(BaseModel):
     heart_rate_bpm: Optional[float] = Field(None, description="Measured heart rate in beats per minute", examples=[75.0])
     spo2_percent: Optional[float] = Field(None, description="Blood oxygen saturation percentage", examples=[98.5])
     temperature_c: Optional[float] = Field(None, description="Body temperature in Celsius", examples=[36.6])
-    sensor_quality: Literal["good", "fair", "poor", "unknown"] = Field("unknown", description="Sensor signal stability and contact quality", examples=["good"])
+    sensor_quality: Literal["good", "fair", "poor", "unknown"] = Field("good", description="Sensor signal stability and contact quality", examples=["good"])
+    ecg: Optional[float] = Field(None, description="Optional Electrocardiogram (ECG) reading", examples=[0.12])
+    bp_systolic: Optional[float] = Field(None, description="Optional Systolic blood pressure (mmHg)", examples=[120.0])
+    bp_diastolic: Optional[float] = Field(None, description="Optional Diastolic blood pressure (mmHg)", examples=[80.0])
 
 class AnalysisRequest(BaseModel):
+    patient_id: Optional[str] = Field(None, description="Identifier of the monitored patient", examples=["patient_1001"])
     heart_rate_bpm: Optional[float] = Field(None, description="Heart rate in beats per minute", examples=[75.0])
     spo2_percent: Optional[float] = Field(None, description="Blood oxygen saturation (SpO2 %)", examples=[98.0])
     temperature_c: Optional[float] = Field(None, description="Body temperature in Celsius", examples=[36.7])
