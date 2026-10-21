@@ -240,7 +240,7 @@ def analyze_values(hr, spo2, temp=None, ecg=None, bp_systolic=None, bp_diastolic
     return {
         "result": "UNUSUAL_PATTERN" if is_anomaly else "NO_UNUSUAL_PATTERN",
         "anomaly_score": iso_score,
-        "explanation": "Statistical anomaly screening across 3 AI models. Not a medical diagnostic claim.",
+        "explanation": "Multi-model vital sign anomaly screening completed across Isolation Forest, One-Class SVM, and PyTorch Autoencoder.",
         "data_quality_status": "valid",
         "temperature_c": temp,
         "ensemble_anomaly": is_anomaly,

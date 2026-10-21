@@ -1,6 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
-    app_name: str = "Smart Healthcare Monitoring API"
+    app_name: str = "Uyir+ Smart Healthcare AI Platform"
     environment: str = "development"
     database_url: str = ""
     device_api_key: str = "change-me"
