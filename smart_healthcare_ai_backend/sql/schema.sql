@@ -25,9 +25,20 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_status_time ON alerts(status, triggered_at DESC);
 
+-- Profiles table linked to Supabase Auth users
+CREATE TABLE IF NOT EXISTS public.profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  email TEXT,
+  full_name TEXT,
+  role TEXT DEFAULT 'patient',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Ensure all tables are visible and accessible in Supabase Table Editor & APIs
 ALTER TABLE measurements DISABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_analysis DISABLE ROW LEVEL SECURITY;
 ALTER TABLE alerts DISABLE ROW LEVEL SECURITY;
 ALTER TABLE patient_vitals DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.profiles DISABLE ROW LEVEL SECURITY;
 

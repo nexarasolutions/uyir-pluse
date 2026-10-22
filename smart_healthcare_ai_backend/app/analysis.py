@@ -12,8 +12,16 @@ Original 5-feature input order:
 from pathlib import Path
 import pickle
 import numpy as np
-import torch
-import torch.nn as nn
+
+try:
+    import torch
+    import torch.nn as nn
+    TORCH_AVAILABLE = True
+except ImportError:
+    torch = None
+    nn = None
+    TORCH_AVAILABLE = False
+
 from app.config import settings
 
 # Base directory of the backend
@@ -27,32 +35,37 @@ AE_PATH = MODELS_DIR / "autoencoder_model.pt"
 FIVE_FEATURES = ["heart_rate", "spo2", "ecg", "bp_systolic", "bp_diastolic"]
 
 
-class PyTorchAutoencoder(nn.Module):
-    """Original Deep Autoencoder architecture from ml/train_model.py."""
-    def __init__(self, input_dim=5):
-        super(PyTorchAutoencoder, self).__init__()
-        # Encoder: input_dim -> 16 -> 8 -> 4
-        self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 16),
-            nn.ReLU(),
-            nn.Linear(16, 8),
-            nn.ReLU(),
-            nn.Linear(8, 4),
-            nn.ReLU()
-        )
-        # Decoder: 4 -> 8 -> 16 -> input_dim
-        self.decoder = nn.Sequential(
-            nn.Linear(4, 8),
-            nn.ReLU(),
-            nn.Linear(8, 16),
-            nn.ReLU(),
-            nn.Linear(16, input_dim)
-        )
+if TORCH_AVAILABLE:
+    class PyTorchAutoencoder(nn.Module):
+        """Original Deep Autoencoder architecture from ml/train_model.py."""
+        def __init__(self, input_dim=5):
+            super(PyTorchAutoencoder, self).__init__()
+            # Encoder: input_dim -> 16 -> 8 -> 4
+            self.encoder = nn.Sequential(
+                nn.Linear(input_dim, 16),
+                nn.ReLU(),
+                nn.Linear(16, 8),
+                nn.ReLU(),
+                nn.Linear(8, 4),
+                nn.ReLU()
+            )
+            # Decoder: 4 -> 8 -> 16 -> input_dim
+            self.decoder = nn.Sequential(
+                nn.Linear(4, 8),
+                nn.ReLU(),
+                nn.Linear(8, 16),
+                nn.ReLU(),
+                nn.Linear(16, input_dim)
+            )
 
-    def forward(self, x):
-        encoded = self.encoder(x)
-        decoded = self.decoder(encoded)
-        return decoded
+        def forward(self, x):
+            encoded = self.encoder(x)
+            decoded = self.decoder(encoded)
+            return decoded
+else:
+    class PyTorchAutoencoder:
+        def __init__(self, *args, **kwargs):
+            pass
 
 
 class ModelRegistry:
@@ -82,7 +95,7 @@ class ModelRegistry:
                 self.one_class_svm = None
 
         # 3. PyTorch Autoencoder
-        if AE_PATH.exists():
+        if AE_PATH.exists() and TORCH_AVAILABLE and torch is not None:
             try:
                 checkpoint = torch.load(AE_PATH, map_location="cpu")
                 input_dim = checkpoint.get("input_dim", 5)
@@ -226,12 +239,16 @@ def analyze_values(hr, spo2, temp=None, ecg=None, bp_systolic=None, bp_diastolic
     svm_score = float(registry.one_class_svm.decision_function(raw_5)[0])
 
     # Model 3: PyTorch Autoencoder
-    scaled_5 = registry.ae_scaler.transform(raw_5)
-    tensor_5 = torch.tensor(scaled_5, dtype=torch.float32)
-    with torch.no_grad():
-        recon_5 = registry.autoencoder(tensor_5)
-        recon_mse = float(torch.mean((tensor_5 - recon_5) ** 2).item())
-    ae_pred = -1 if recon_mse > registry.ae_threshold else 1
+    if registry.autoencoder is not None and TORCH_AVAILABLE and torch is not None:
+        scaled_5 = registry.ae_scaler.transform(raw_5)
+        tensor_5 = torch.tensor(scaled_5, dtype=torch.float32)
+        with torch.no_grad():
+            recon_5 = registry.autoencoder(tensor_5)
+            recon_mse = float(torch.mean((tensor_5 - recon_5) ** 2).item())
+        ae_pred = -1 if recon_mse > registry.ae_threshold else 1
+    else:
+        recon_mse = 0.0
+        ae_pred = iso_pred
 
     # Ensemble decision: Flag as anomaly if at least 2 models flag -1
     votes = [iso_pred, svm_pred, ae_pred]

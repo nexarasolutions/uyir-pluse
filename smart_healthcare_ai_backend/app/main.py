@@ -1,11 +1,37 @@
 from datetime import datetime, timezone
-from fastapi import FastAPI, Depends, HTTPException, Query, status
+from typing import Optional
+from fastapi import FastAPI, Depends, HTTPException, Query, status, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from app.config import settings
 from app.db import require_db
-from app.schemas import MeasurementIn, AnalysisRequest
-from app.security import verify_device_key, verify_dashboard_key
+from app.schemas import (
+    MeasurementIn,
+    AnalysisRequest,
+    UserSignUp,
+    UserLogin,
+    TokenResponse,
+    UserOut,
+    PasswordResetRequest,
+    MessageResponse,
+)
+from app.security import (
+    verify_device_key,
+    verify_dashboard_key,
+    require_authenticated_user,
+    bearer_security,
+    api_key_security,
+)
 from app.analysis import analyze_values, get_models_status
+from app.auth import (
+    signup_user,
+    login_user,
+    get_user_profile,
+    create_access_token,
+    request_password_reset,
+)
 
 tags_metadata = [
     {
@@ -13,7 +39,11 @@ tags_metadata = [
         "description": "Liveness probes, system readiness checks, and service discovery endpoints.",
     },
     {
-        "name": "AI Anomaly Screening",
+        "name": "Supabase Authentication",
+        "description": "User registration, sign-in, JWT credential issuance, and user profile management integrated with Supabase Auth.",
+    },
+    {
+        "name": "AI Anomaly Detection",
         "description": "High-performance inference engine combining Isolation Forest, One-Class SVM, and PyTorch Deep Autoencoder.",
     },
     {
@@ -30,49 +60,94 @@ tags_metadata = [
     },
 ]
 
-app_description = """
+app_description = f"""
 # 🩺 Uyir+ Smart Healthcare AI Monitoring Platform
 
-Enterprise-grade IoT vital sign ingestion, multi-model AI anomaly screening, and clinical alert orchestration.
+Enterprise-grade IoT vital sign ingestion, multi-model AI anomaly screening, clinical alert orchestration, and Supabase Authentication.
 
 ---
 
 ### 🚀 Core Architecture
+* **Supabase Authentication:** Secure user management (`auth.users`, `public.profiles`, bcrypt, JWT tokens).
 * **Real-time IoT Ingestion:** Continuous vital sign streaming from wearable edge hardware.
 * **Triple-Ensemble AI Engine:**
   * **Isolation Forest:** Statistical outlier and distribution boundary detection.
   * **One-Class SVM:** Non-linear kernel boundary separation.
   * **Deep PyTorch Autoencoder:** Reconstruction error Mean Squared Error (MSE) anomaly scoring.
-* **Resilient Cloud Persistence:** Low-latency storage backed by Supabase PostgreSQL (`measurements`, `ai_analysis`, `alerts`).
+* **Resilient Cloud Persistence:** Low-latency storage backed by Supabase PostgreSQL (`measurements`, `ai_analysis`, `alerts`, `patient_vitals`, `profiles`).
 
 ---
 
 ### 🔐 Authentication & Swagger Testing
-* **Test in Swagger ("Try it out" & "Execute"):** In development mode, endpoints can be executed directly, or click **Authorize 🔒** and paste one of your keys:
-  * **Device API Key:** `SFPdei_u_CW9qsZKZ8kccMBvN5QgfD0Z9hytLn9xr0I`
-  * **Dashboard API Key:** `MpgbyhfTyqH5zo-ikzUj8OwR_adGVL5VErCu-YeViBI`
+* **Test in Swagger ("Try it out" & "Execute"):** Click **Authorize 🔒** at top-right and choose:
+  1. **BearerAuth (JWT):** Sign up or log in via `/api/v1/auth/login` to obtain your Bearer token and paste it here.
+  2. **ApiKeyAuth (X-API-Key):** Enter Device Key (`{settings.device_api_key}`) or Dashboard Key (`{settings.dashboard_api_key}`).
+  3. In development mode, endpoints can also be executed directly without credentials for frictionless local testing.
 * All executed readings and AI anomaly screenings are automatically persisted to the Supabase database.
 """
 
-from fastapi.middleware.cors import CORSMiddleware
-
 app = FastAPI(
     title=settings.app_name,
-    version="2.0.0",
+    version="2.1.0",
     description=app_description,
     openapi_tags=tags_metadata,
     docs_url="/docs",
     redoc_url="/redoc",
 )
 
+# Flexible CORS configuration compatible with web browsers, React, Next.js, and mobile apps
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+# ==========================================
+# Custom Exception Handlers for Clean Errors
+# ==========================================
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Formats validation errors into friendly 400 Bad Request responses with actionable hints."""
+    errors = []
+    for err in exc.errors():
+        loc_str = " -> ".join(str(item) for item in err.get("loc", []))
+        msg = err.get("msg", "Validation error")
+        errors.append(f"{loc_str}: {msg}")
+
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={
+            "error": True,
+            "status_code": 400,
+            "message": "Validation Error: Request payload contains missing or invalid fields.",
+            "details": errors,
+            "hint": "Please check parameter schemas in Swagger documentation. For telemetry, provide valid numeric ranges.",
+        },
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Provides consistent JSON error response formatting for HTTP exceptions."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": True,
+            "status_code": exc.status_code,
+            "message": exc.detail if isinstance(exc.detail, str) else "Request error",
+            "details": exc.detail,
+        },
+        headers=getattr(exc, "headers", None),
+    )
+
+
+# ==========================================
+# System & Diagnostics Endpoints
+# ==========================================
 
 @app.get(
     "/",
@@ -83,12 +158,17 @@ app.add_middleware(
 def root():
     return {
         "platform": settings.app_name,
-        "version": "2.0.0",
+        "version": "2.1.0",
         "status": "operational",
         "documentation": "/docs",
         "redoc": "/redoc",
         "health": "/health",
         "readiness": "/ready",
+        "auth": {
+            "signup": "/api/v1/auth/signup",
+            "login": "/api/v1/auth/login",
+            "me": "/api/v1/auth/me",
+        },
         "models": "/api/v1/model/status",
     }
 
@@ -136,6 +216,98 @@ def readiness():
     }
 
 
+# ==========================================
+# Supabase Authentication Routes
+# ==========================================
+
+@app.post(
+    "/api/v1/auth/signup",
+    tags=["Supabase Authentication"],
+    summary="Register New User Account with Supabase",
+    description="Creates a new account in Supabase auth.users and public.profiles with bcrypt encryption and returns an active Supabase JWT access token.",
+    status_code=status.HTTP_201_CREATED,
+    response_model=TokenResponse,
+)
+def auth_signup(payload: UserSignUp):
+    return signup_user(payload)
+
+
+@app.post(
+    "/api/v1/auth/login",
+    tags=["Supabase Authentication"],
+    summary="Authenticate User with Email & Password",
+    description="Verifies user credentials against Supabase auth.users, updates sign-in timestamps, and returns a signed Supabase JWT Bearer token.",
+    response_model=TokenResponse,
+)
+def auth_login(payload: UserLogin):
+    return login_user(payload)
+
+
+@app.get(
+    "/api/v1/auth/me",
+    tags=["Supabase Authentication"],
+    summary="Get Current User Profile",
+    description="Retrieves the authenticated user profile and healthcare role from Supabase using their Bearer JWT token.",
+    response_model=UserOut,
+)
+def auth_me(user: dict = Depends(require_authenticated_user)):
+    user_id = user.get("sub")
+    return get_user_profile(user_id)
+
+
+@app.post(
+    "/api/v1/auth/refresh",
+    tags=["Supabase Authentication"],
+    summary="Refresh Session Token",
+    description="Generates a fresh Supabase JWT Bearer token for the authenticated user session.",
+    response_model=TokenResponse,
+)
+def auth_refresh(user: dict = Depends(require_authenticated_user)):
+    user_id = user.get("sub")
+    profile = get_user_profile(user_id)
+    new_token = create_access_token(
+        user_id=profile.id,
+        email=profile.email,
+        role=profile.role,
+    )
+    return TokenResponse(
+        access_token=new_token,
+        token_type="bearer",
+        expires_in=settings.jwt_access_token_expire_minutes * 60,
+        user=profile,
+    )
+
+
+@app.post(
+    "/api/v1/auth/logout",
+    tags=["Supabase Authentication"],
+    summary="Sign Out Current User",
+    description="Terminates active session token context.",
+    response_model=MessageResponse,
+)
+def auth_logout(user: dict = Depends(require_authenticated_user)):
+    return MessageResponse(
+        message="Successfully signed out of Supabase session.",
+        success=True,
+    )
+
+
+@app.post(
+    "/api/v1/auth/reset-password",
+    tags=["Supabase Authentication"],
+    summary="Request Password Recovery",
+    description="Generates a password recovery token in Supabase for the specified email address.",
+    response_model=MessageResponse,
+)
+def auth_reset_password(payload: PasswordResetRequest):
+    res = request_password_reset(payload.email)
+    return MessageResponse(message=res["message"], success=res["success"])
+
+
+# ==========================================
+# AI Model Specifications
+# ==========================================
+
 @app.get(
     "/api/v1/model/status",
     tags=["AI Anomaly Detection"],
@@ -145,6 +317,10 @@ def readiness():
 def model_status():
     return get_models_status()
 
+
+# ==========================================
+# Device Telemetry Ingestion
+# ==========================================
 
 @app.post(
     "/api/v1/measurements",
@@ -183,22 +359,28 @@ def create_measurement(payload: MeasurementIn):
         ).mappings().one()
         measurement_id = row["id"]
 
-        # 2. Also sync to patient_vitals if table exists
-        try:
-            db.execute(
-                text(
-                    "INSERT INTO patient_vitals(device_id, heart_rate, spo2, temperature, recorded_at) "
-                    "VALUES (:device, :hr, :spo2, :temp, NOW())"
-                ),
-                {
-                    "device": payload.device_id,
-                    "hr": payload.heart_rate_bpm,
-                    "spo2": payload.spo2_percent,
-                    "temp": payload.temperature_c,
-                },
-            )
-        except Exception:
-            pass
+        # 2. Also sync to patient_vitals if vital readings are present (use SAVEPOINT to protect transaction)
+        if (
+            payload.heart_rate_bpm is not None
+            and payload.spo2_percent is not None
+            and payload.temperature_c is not None
+        ):
+            try:
+                with db.begin_nested():
+                    db.execute(
+                        text(
+                            "INSERT INTO patient_vitals(device_id, heart_rate, spo2, temperature, recorded_at) "
+                            "VALUES (:device, :hr, :spo2, :temp, NOW())"
+                        ),
+                        {
+                            "device": payload.device_id,
+                            "hr": payload.heart_rate_bpm,
+                            "spo2": payload.spo2_percent,
+                            "temp": payload.temperature_c,
+                        },
+                    )
+            except Exception:
+                pass
 
         # 3. Automated AI Vital Signs Screening
         ai_result = analyze_values(
@@ -212,21 +394,22 @@ def create_measurement(payload: MeasurementIn):
 
         ai_id = None
         try:
-            ai_row = db.execute(
-                text(
-                    "INSERT INTO ai_analysis(measurement_id,device_id,result,anomaly_score,explanation,model_version) "
-                    "VALUES (:m_id,:device,:result,:score,:explanation,:version) RETURNING id"
-                ),
-                {
-                    "m_id": measurement_id,
-                    "device": payload.device_id,
-                    "result": ai_result.get("result", "UNKNOWN"),
-                    "score": ai_result.get("anomaly_score") or 0.0,
-                    "explanation": ai_result.get("explanation", ""),
-                    "version": "v2.0-ensemble-iso-svm-ae",
-                },
-            ).mappings().one()
-            ai_id = ai_row["id"]
+            with db.begin_nested():
+                ai_row = db.execute(
+                    text(
+                        "INSERT INTO ai_analysis(measurement_id,device_id,result,anomaly_score,explanation,model_version) "
+                        "VALUES (:m_id,:device,:result,:score,:explanation,:version) RETURNING id"
+                    ),
+                    {
+                        "m_id": measurement_id,
+                        "device": payload.device_id,
+                        "result": ai_result.get("result", "UNKNOWN"),
+                        "score": ai_result.get("anomaly_score") or 0.0,
+                        "explanation": ai_result.get("explanation", ""),
+                        "version": "v2.0-ensemble-iso-svm-ae",
+                    },
+                ).mappings().one()
+                ai_id = ai_row["id"]
         except Exception:
             pass
 
@@ -250,19 +433,20 @@ def create_measurement(payload: MeasurementIn):
                 reasons.append(f"Abnormal body temperature: {payload.temperature_c}°C")
 
             try:
-                alert_row = db.execute(
-                    text(
-                        "INSERT INTO alerts(device_id,measurement_id,alert_type,severity,reason,status) "
-                        "VALUES (:device,:m_id,'vital_anomaly',:severity,:reason,'open') RETURNING id"
-                    ),
-                    {
-                        "device": payload.device_id,
-                        "m_id": measurement_id,
-                        "severity": severity,
-                        "reason": "; ".join(reasons),
-                    },
-                ).mappings().one()
-                alert_id = alert_row["id"]
+                with db.begin_nested():
+                    alert_row = db.execute(
+                        text(
+                            "INSERT INTO alerts(device_id,measurement_id,alert_type,severity,reason,status) "
+                            "VALUES (:device,:m_id,'vital_anomaly',:severity,:reason,'open') RETURNING id"
+                        ),
+                        {
+                            "device": payload.device_id,
+                            "m_id": measurement_id,
+                            "severity": severity,
+                            "reason": "; ".join(reasons),
+                        },
+                    ).mappings().one()
+                    alert_id = alert_row["id"]
             except Exception:
                 pass
 
@@ -274,6 +458,9 @@ def create_measurement(payload: MeasurementIn):
         res_dict["alert_id"] = alert_id
         res_dict["saved_to_database"] = True
         return res_dict
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         raise HTTPException(
@@ -283,6 +470,10 @@ def create_measurement(payload: MeasurementIn):
     finally:
         db.close()
 
+
+# ==========================================
+# Patient Monitoring Endpoints
+# ==========================================
 
 @app.get(
     "/api/v1/devices/{device_id}/latest",
@@ -329,6 +520,10 @@ def history(device_id: str, limit: int = Query(default=100, ge=1, le=1000, descr
     finally:
         db.close()
 
+
+# ==========================================
+# Multi-Model AI Anomaly Analysis
+# ==========================================
 
 @app.post(
     "/api/v1/devices/{device_id}/analyze",
@@ -379,41 +574,51 @@ def analyze(
             measurement_id = m_row["id"]
             result["measurement_id"] = measurement_id
 
-            # 2. Also sync to patient_vitals if table exists
+            # 2. Sync to patient_vitals if vitals are provided (protected by SAVEPOINT)
+            if (
+                payload.heart_rate_bpm is not None
+                and payload.spo2_percent is not None
+                and payload.temperature_c is not None
+            ):
+                try:
+                    with db.begin_nested():
+                        db.execute(
+                            text(
+                                "INSERT INTO patient_vitals(device_id, heart_rate, spo2, temperature, recorded_at) "
+                                "VALUES (:device, :hr, :spo2, :temp, NOW())"
+                            ),
+                            {
+                                "device": device_id,
+                                "hr": payload.heart_rate_bpm,
+                                "spo2": payload.spo2_percent,
+                                "temp": payload.temperature_c,
+                            },
+                        )
+                except Exception:
+                    pass
+
+            # 3. Save AI analysis record (protected by SAVEPOINT)
             try:
-                db.execute(
-                    text(
-                        "INSERT INTO patient_vitals(device_id, heart_rate, spo2, temperature, recorded_at) "
-                        "VALUES (:device, :hr, :spo2, :temp, NOW())"
-                    ),
-                    {
-                        "device": device_id,
-                        "hr": payload.heart_rate_bpm,
-                        "spo2": payload.spo2_percent,
-                        "temp": payload.temperature_c,
-                    },
-                )
+                with db.begin_nested():
+                    ai_row = db.execute(
+                        text(
+                            "INSERT INTO ai_analysis(measurement_id,device_id,result,anomaly_score,explanation,model_version) "
+                            "VALUES (:m_id,:device,:result,:score,:explanation,:version) RETURNING id"
+                        ),
+                        {
+                            "m_id": measurement_id,
+                            "device": device_id,
+                            "result": result.get("result", "UNKNOWN"),
+                            "score": result.get("anomaly_score") or 0.0,
+                            "explanation": result.get("explanation", ""),
+                            "version": "v2.0-ensemble-iso-svm-ae",
+                        },
+                    ).mappings().one()
+                    result["ai_analysis_id"] = ai_row["id"]
             except Exception:
                 pass
 
-            # 3. Save AI analysis record
-            ai_row = db.execute(
-                text(
-                    "INSERT INTO ai_analysis(measurement_id,device_id,result,anomaly_score,explanation,model_version) "
-                    "VALUES (:m_id,:device,:result,:score,:explanation,:version) RETURNING id"
-                ),
-                {
-                    "m_id": measurement_id,
-                    "device": device_id,
-                    "result": result.get("result", "UNKNOWN"),
-                    "score": result.get("anomaly_score") or 0.0,
-                    "explanation": result.get("explanation", ""),
-                    "version": "v2.0-ensemble-iso-svm-ae",
-                },
-            ).mappings().one()
-            result["ai_analysis_id"] = ai_row["id"]
-
-            # 4. Trigger alert if anomaly or critical thresholds
+            # 4. Trigger alert if anomaly or critical thresholds (protected by SAVEPOINT)
             is_anomaly = result.get("ensemble_anomaly", False) or result.get("result") == "UNUSUAL_PATTERN"
             is_extreme_hr = payload.heart_rate_bpm is not None and (payload.heart_rate_bpm < 50 or payload.heart_rate_bpm > 120)
             is_low_spo2 = payload.spo2_percent is not None and payload.spo2_percent < 92.0
@@ -431,20 +636,24 @@ def analyze(
                 if is_fever:
                     reasons.append(f"Abnormal body temperature: {payload.temperature_c}°C")
 
-                alert_row = db.execute(
-                    text(
-                        "INSERT INTO alerts(device_id,measurement_id,alert_type,severity,reason,status) "
-                        "VALUES (:device,:m_id,'vital_anomaly',:severity,:reason,'open') RETURNING id"
-                    ),
-                    {
-                        "device": device_id,
-                        "m_id": measurement_id,
-                        "severity": severity,
-                        "reason": "; ".join(reasons),
-                    },
-                ).mappings().one()
-                result["alert_id"] = alert_row["id"]
-                result["alert_triggered"] = True
+                try:
+                    with db.begin_nested():
+                        alert_row = db.execute(
+                            text(
+                                "INSERT INTO alerts(device_id,measurement_id,alert_type,severity,reason,status) "
+                                "VALUES (:device,:m_id,'vital_anomaly',:severity,:reason,'open') RETURNING id"
+                            ),
+                            {
+                                "device": device_id,
+                                "m_id": measurement_id,
+                                "severity": severity,
+                                "reason": "; ".join(reasons),
+                            },
+                        ).mappings().one()
+                        result["alert_id"] = alert_row["id"]
+                        result["alert_triggered"] = True
+                except Exception:
+                    result["alert_triggered"] = False
             else:
                 result["alert_triggered"] = False
 
@@ -459,6 +668,10 @@ def analyze(
 
     return result
 
+
+# ==========================================
+# Clinical Alerts Endpoints
+# ==========================================
 
 @app.get(
     "/api/v1/alerts",

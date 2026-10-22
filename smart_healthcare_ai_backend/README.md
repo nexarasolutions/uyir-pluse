@@ -11,26 +11,38 @@ Educational prototype for ESP32-C3, MAX30102 and DS18B20. NOT a certified medica
 Use real, lawfully obtained, de-identified data or clearly labelled simulated data for software tests. Do not report simulated-data performance as clinical accuracy. Isolation Forest detects statistical outliers; it is not a medical diagnostic model.
 
 ## Step 2: Configure and run backend
-1. Copy `.env.example` to `.env`.
-2. Set `DATABASE_URL`, `DEVICE_API_KEY`, `DASHBOARD_API_KEY`.
-3. Run `sql/schema.sql` in Supabase SQL Editor.
+1. Copy `.env.example` to `.env` or verify `.env`.
+2. Ensure `DATABASE_URL`, `DEVICE_API_KEY`, `DASHBOARD_API_KEY`, `SUPABASE_URL`, and `JWT_SECRET` are set.
+3. Run `sql/schema.sql` in Supabase SQL Editor to initialize tables (`measurements`, `ai_analysis`, `alerts`, `patient_vitals`, `public.profiles`).
 4. Install dependencies: `pip install -r requirements.txt`.
-5. Run `uvicorn app.main:app --reload`.
-6. Open `http://127.0.0.1:8000/docs`.
+5. Run server:
+   ```bash
+   cd smart_healthcare_ai_backend
+   uvicorn app.main:app --reload
+   ```
+6. Open Swagger UI at `http://127.0.0.1:8000/docs`.
 
-## APIs
-- `GET /health`
-- `GET /api/v1/model/status`
-- `POST /api/v1/measurements` with `X-Device-Key`
-- `GET /api/v1/devices/{device_id}/latest` with `X-Dashboard-Key`
-- `GET /api/v1/devices/{device_id}/history?limit=100`
-- `POST /api/v1/devices/{device_id}/analyze`
-- `GET /api/v1/alerts?limit=100`
+## APIs & Swagger Testing
 
-Example ESP32 JSON:
-```json
-{"device_id":"esp32c3-001","patient_id":"demo-patient-001","heart_rate_bpm":76.0,"spo2_percent":98.0,"temperature_c":36.7,"sensor_quality":"good"}
-```
-Send `null` for unavailable readings; never fabricate zero values. Use HTTPS when deployed. Keep `.env` private and never place secrets in browser code.
+### 🔐 Authentication (Supabase Auth)
+- `POST /api/v1/auth/signup` — Create user account with Supabase Auth (`doctor`, `patient`, `nurse`, `admin`).
+- `POST /api/v1/auth/login` — Sign in with email & password, receive Supabase JWT access token.
+- `GET /api/v1/auth/me` — Retrieve active user profile (`Authorization: Bearer <token>`).
+- `POST /api/v1/auth/refresh` — Refresh active JWT session token.
+- `POST /api/v1/auth/logout` — Terminate active session.
+- `POST /api/v1/auth/reset-password` — Dispatch password reset request.
 
-The API is a starter and needs configuration/testing before deployment. Medical thresholds, sensor quality handling and model performance require clinical validation.
+### 🩺 Clinical & IoT Telemetry
+- `GET /health` & `GET /ready` — Service liveness and Supabase database readiness.
+- `GET /api/v1/model/status` — Multi-model AI ensemble architecture inspection.
+- `POST /api/v1/measurements` — Ingest IoT hardware telemetry (ESP32) with automatic AI screening.
+- `GET /api/v1/devices/{device_id}/latest` — Latest vital signs reading for hardware node.
+- `GET /api/v1/devices/{device_id}/history?limit=100` — Longitudinal patient vitals stream.
+- `POST /api/v1/devices/{device_id}/analyze` — Multi-model AI anomaly screening (Isolation Forest + SVM + Autoencoder) and Supabase persistence.
+- `GET /api/v1/alerts?limit=100` — Clinical anomaly alerts and threshold breach triage.
+
+### 💡 Swagger Authorize 🔒
+In Swagger UI (`/docs`), click **Authorize 🔒** and select either:
+1. **BearerAuth (http, Bearer):** Paste the JWT access token from `/api/v1/auth/login`.
+2. **ApiKeyAuth (X-API-Key):** Enter Device Key or Dashboard Key.
+3. In `development` mode, endpoints can also be executed directly without credentials.

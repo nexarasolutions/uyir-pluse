@@ -16,6 +16,14 @@ class Settings(BaseSettings):
     device_api_key: str = "change-me"
     dashboard_api_key: str = "change-me-too"
     model_path: str = "models/isolation_forest_model.pkl"
+    # Supabase Configuration
+    supabase_url: str = "https://epuewqdawywhxzuqaukj.supabase.co"
+    supabase_anon_key: str = ""
+    supabase_service_role_key: str = ""
+    # Supabase Auth / JWT Configuration
+    jwt_secret: str = "uyir-plus-secret-key-32-bytes-secure-auth-2026"
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 10080  # 7 days
     model_config = SettingsConfigDict(env_file=ENV_LOCATIONS, extra="ignore", case_sensitive=False)
 
 settings = Settings()
