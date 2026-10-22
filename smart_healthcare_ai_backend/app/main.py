@@ -54,6 +54,8 @@ Enterprise-grade IoT vital sign ingestion, multi-model AI anomaly screening, and
 * All executed readings and AI anomaly screenings are automatically persisted to the Supabase database.
 """
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title=settings.app_name,
     version="2.0.0",
@@ -61,6 +63,14 @@ app = FastAPI(
     openapi_tags=tags_metadata,
     docs_url="/docs",
     redoc_url="/redoc",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
