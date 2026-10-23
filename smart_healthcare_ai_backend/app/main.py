@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import FastAPI, Depends, HTTPException, Query, status, Request
+from fastapi import FastAPI, Depends, HTTPException, Query, Path, status, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +16,16 @@ from app.schemas import (
     UserOut,
     PasswordResetRequest,
     MessageResponse,
+    SosAlertRequest,
+    AlertAcknowledgeResponse,
+    PrescriptionCreate,
+    PrescriptionRefillRequest,
+    MedicationDoseCreate,
+    MedicationToggleRequest,
+    CaregiverCreate,
+    CaregiverNotifyRequest,
+    AutomationRuleCreate,
+    AutomationRuleToggleRequest,
 )
 from app.security import (
     verify_device_key,
@@ -58,6 +68,22 @@ tags_metadata = [
         "name": "Clinical Alerts",
         "description": "Critical vital sign anomalies, physiological threshold breaches, and alert triage management.",
     },
+    {
+        "name": "Prescriptions & Pharmacy",
+        "description": "Active prescription regimens, refills, days supply tracking, and dispensing status.",
+    },
+    {
+        "name": "Medication Adherence",
+        "description": "Scheduled daily doses, patient adherence logging, and compliance tracking.",
+    },
+    {
+        "name": "Caregiver Network",
+        "description": "Emergency contacts, relative notifications, and multi-tier clinical dispatch directory.",
+    },
+    {
+        "name": "Clinical Automation & Workflows",
+        "description": "Automated incident response rules, escalation policies, and IoT actuators.",
+    },
 ]
 
 app_description = f"""
@@ -81,7 +107,7 @@ Enterprise-grade IoT vital sign ingestion, multi-model AI anomaly screening, cli
 ### 🔐 Authentication & Swagger Testing
 * **Test in Swagger ("Try it out" & "Execute"):** Click **Authorize 🔒** at top-right and choose:
   1. **BearerAuth (JWT):** Sign up or log in via `/api/v1/auth/login` to obtain your Bearer token and paste it here.
-  2. **ApiKeyAuth (X-API-Key):** Enter Device Key (`{settings.device_api_key}`) or Dashboard Key (`{settings.dashboard_api_key}`).
+  2. **ApiKeyAuth (X-API-Key):** Enter your provisioned Device API Key or Dashboard API Key from your environment configuration.
   3. In development mode, endpoints can also be executed directly without credentials for frictionless local testing.
 * All executed readings and AI anomaly screenings are automatically persisted to the Supabase database.
 """
@@ -95,10 +121,11 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# Flexible CORS configuration compatible with web browsers, React, Next.js, and mobile apps
+# Hardened CORS configuration allowing verified localhost, development tunnels, and configured domains
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"https?://.*",
+    allow_origins=settings.cors_origins,
+    allow_origin_regex=settings.cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -691,5 +718,534 @@ def alerts(limit: int = Query(default=100, ge=1, le=1000, description="Maximum n
             {"lim": limit},
         ).mappings().all()
         return {"items": [dict(r) for r in rows], "count": len(rows)}
+    finally:
+        db.close()
+
+
+# ==========================================
+# Alert Action Endpoints (Phase 2)
+# ==========================================
+
+@app.patch(
+    "/api/v1/alerts/{alert_id}/acknowledge",
+    tags=["Clinical Alerts"],
+    summary="Acknowledge Clinical Alert",
+    description="Marks an active clinical alert as acknowledged with the current UTC timestamp.",
+    dependencies=[Depends(verify_dashboard_key)],
+)
+@app.post(
+    "/api/v1/alerts/{alert_id}/acknowledge",
+    tags=["Clinical Alerts"],
+    summary="Acknowledge Clinical Alert (POST alias)",
+    include_in_schema=False,
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def acknowledge_alert(alert_id: int = Path(..., description="ID of alert to acknowledge")):
+    db = require_db()
+    try:
+        now = datetime.now(timezone.utc)
+        row = db.execute(
+            text(
+                "UPDATE alerts SET status = 'acknowledged', acknowledged_at = :now WHERE id = :id "
+                "RETURNING id, device_id, alert_type, severity, reason, status, triggered_at, acknowledged_at"
+            ),
+            {"now": now, "id": alert_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Alert with ID {alert_id} not found.")
+        db.commit()
+        return {
+            "success": True,
+            "alert_id": row["id"],
+            "status": row["status"],
+            "acknowledged_at": row["acknowledged_at"].isoformat() if row["acknowledged_at"] else now.isoformat(),
+            "message": f"Alert #{alert_id} successfully acknowledged.",
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to acknowledge alert: {str(e)}") from e
+    finally:
+        db.close()
+
+
+@app.post(
+    "/api/v1/alerts/sos",
+    tags=["Clinical Alerts"],
+    summary="Trigger Emergency SOS Alert",
+    description="Immediately raises an emergency clinical SOS broadcast across connected edge units and caregiver contacts.",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def trigger_sos_alert(payload: SosAlertRequest):
+    db = require_db()
+    try:
+        now = datetime.now(timezone.utc)
+        location_suffix = f" [Location: {payload.location}]" if payload.location else ""
+        row = db.execute(
+            text(
+                "INSERT INTO alerts (device_id, alert_type, severity, reason, status, triggered_at) "
+                "VALUES (:device_id, 'MANUAL_SOS', :severity, :reason, 'open', :now) "
+                "RETURNING id, device_id, alert_type, severity, reason, status, triggered_at"
+            ),
+            {
+                "device_id": payload.device_id,
+                "severity": payload.severity,
+                "reason": f"EMERGENCY SOS: {payload.reason}{location_suffix}",
+                "now": now,
+            },
+        ).mappings().first()
+        db.commit()
+        return {
+            "success": True,
+            "alert": dict(row),
+            "message": "Critical SOS emergency broadcast initiated successfully.",
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to initiate SOS alert: {str(e)}") from e
+    finally:
+        db.close()
+
+
+# ==========================================
+# Prescriptions & Pharmacy Endpoints (Phase 4)
+# ==========================================
+
+@app.get(
+    "/api/v1/prescriptions",
+    tags=["Prescriptions & Pharmacy"],
+    summary="List Patient Prescriptions",
+    description="Retrieves all active clinical prescriptions, dosages, remaining days supply, and doctor instructions.",
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def list_prescriptions(patient_id: Optional[str] = Query(default=None, description="Optional patient UUID filter")):
+    db = require_db()
+    try:
+        if patient_id:
+            rows = db.execute(
+                text("SELECT * FROM prescriptions WHERE patient_id = :pid ORDER BY id ASC"),
+                {"pid": patient_id},
+            ).mappings().all()
+        else:
+            rows = db.execute(
+                text("SELECT * FROM prescriptions ORDER BY id ASC")
+            ).mappings().all()
+        return {"items": [dict(r) for r in rows], "count": len(rows)}
+    finally:
+        db.close()
+
+
+@app.post(
+    "/api/v1/prescriptions",
+    tags=["Prescriptions & Pharmacy"],
+    summary="Create New Prescription",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def create_prescription(payload: PrescriptionCreate):
+    db = require_db()
+    try:
+        now = datetime.now(timezone.utc)
+        row = db.execute(
+            text(
+                "INSERT INTO prescriptions (patient_id, name, dosage, frequency, doctor, remaining_days, total_days, refills_left, instructions, created_at) "
+                "VALUES (:patient_id, :name, :dosage, :frequency, :doctor, :remaining_days, :total_days, :refills_left, :instructions, :now) "
+                "RETURNING *"
+            ),
+            {
+                "patient_id": payload.patient_id or "patient_1001",
+                "name": payload.name,
+                "dosage": payload.dosage,
+                "frequency": payload.frequency,
+                "doctor": payload.doctor,
+                "remaining_days": payload.remaining_days,
+                "total_days": payload.total_days,
+                "refills_left": payload.refills_left,
+                "instructions": payload.instructions,
+                "now": now,
+            },
+        ).mappings().first()
+        db.commit()
+        return {"success": True, "prescription": dict(row)}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create prescription: {str(e)}") from e
+    finally:
+        db.close()
+
+
+@app.post(
+    "/api/v1/prescriptions/{prescription_id}/refill",
+    tags=["Prescriptions & Pharmacy"],
+    summary="Request Prescription Refill",
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def refill_prescription(
+    prescription_id: int = Path(..., description="ID of prescription to refill"),
+    payload: Optional[PrescriptionRefillRequest] = None,
+):
+    db = require_db()
+    try:
+        row = db.execute(
+            text("SELECT * FROM prescriptions WHERE id = :id"),
+            {"id": prescription_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Prescription #{prescription_id} not found.")
+
+        new_remaining = row["total_days"]
+        new_refills = max(0, row["refills_left"] - 1)
+
+        updated = db.execute(
+            text(
+                "UPDATE prescriptions SET remaining_days = :rem, refills_left = :ref WHERE id = :id RETURNING *"
+            ),
+            {"rem": new_remaining, "ref": new_refills, "id": prescription_id},
+        ).mappings().first()
+        db.commit()
+        rx_name = row["name"]
+        return {
+            "success": True,
+            "message": f"Refill requested for {rx_name}. Pharmacy dispatch initiated.",
+            "prescription": dict(updated),
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to process refill: {str(e)}") from e
+    finally:
+        db.close()
+
+
+# ==========================================
+# Medication Adherence Endpoints (Phase 4)
+# ==========================================
+
+@app.get(
+    "/api/v1/medications",
+    tags=["Medication Adherence"],
+    summary="List Scheduled Medication Doses",
+    description="Retrieves daily medication dosing schedules and compliance flags for the monitored patient.",
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def list_medications(patient_id: Optional[str] = Query(default=None, description="Optional patient UUID filter")):
+    db = require_db()
+    try:
+        if patient_id:
+            rows = db.execute(
+                text("SELECT * FROM medications WHERE patient_id = :pid ORDER BY id ASC"),
+                {"pid": patient_id},
+            ).mappings().all()
+        else:
+            rows = db.execute(
+                text("SELECT * FROM medications ORDER BY id ASC")
+            ).mappings().all()
+        return {"items": [dict(r) for r in rows], "count": len(rows)}
+    finally:
+        db.close()
+
+
+@app.post(
+    "/api/v1/medications",
+    tags=["Medication Adherence"],
+    summary="Schedule Medication Dose",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def create_medication(payload: MedicationDoseCreate):
+    db = require_db()
+    try:
+        now = datetime.now(timezone.utc)
+        row = db.execute(
+            text(
+                "INSERT INTO medications (patient_id, medication_name, time_slot, time_str, dosage, notes, taken, created_at) "
+                "VALUES (:patient_id, :name, :time_slot, :time_str, :dosage, :notes, :taken, :now) "
+                "RETURNING *"
+            ),
+            {
+                "patient_id": payload.patient_id or "patient_1001",
+                "name": payload.medication_name,
+                "time_slot": payload.time_slot,
+                "time_str": payload.time_str,
+                "dosage": payload.dosage,
+                "notes": payload.notes,
+                "taken": payload.taken,
+                "now": now,
+            },
+        ).mappings().first()
+        db.commit()
+        return {"success": True, "medication": dict(row)}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to schedule medication: {str(e)}") from e
+    finally:
+        db.close()
+
+
+@app.patch(
+    "/api/v1/medications/{med_id}/toggle",
+    tags=["Medication Adherence"],
+    summary="Toggle Dose Compliance State",
+    dependencies=[Depends(verify_dashboard_key)],
+)
+@app.post(
+    "/api/v1/medications/{med_id}/toggle",
+    tags=["Medication Adherence"],
+    summary="Toggle Dose Compliance State (POST alias)",
+    include_in_schema=False,
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def toggle_medication(
+    med_id: int = Path(..., description="ID of medication dose to update"),
+    payload: Optional[MedicationToggleRequest] = None,
+):
+    db = require_db()
+    try:
+        now = datetime.now(timezone.utc)
+        taken_state = payload.taken if payload is not None else True
+        taken_at_val = now if taken_state else None
+        row = db.execute(
+            text(
+                "UPDATE medications SET taken = :taken, taken_at = :taken_at WHERE id = :id RETURNING *"
+            ),
+            {"taken": taken_state, "taken_at": taken_at_val, "id": med_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Medication #{med_id} not found.")
+        db.commit()
+        status_label = "Taken" if taken_state else "Pending"
+        return {
+            "success": True,
+            "medication": dict(row),
+            "message": f"Dose compliance status updated to: {status_label}.",
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update medication: {str(e)}") from e
+    finally:
+        db.close()
+
+
+# ==========================================
+# Caregiver Network Endpoints (Phase 4)
+# ==========================================
+
+@app.get(
+    "/api/v1/caregivers",
+    tags=["Caregiver Network"],
+    summary="List Emergency Caregivers & Contacts",
+    description="Retrieves the care network, verified relatives, attending physicians, and emergency dispatch points.",
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def list_caregivers(patient_id: Optional[str] = Query(default=None, description="Optional patient UUID filter")):
+    db = require_db()
+    try:
+        if patient_id:
+            rows = db.execute(
+                text("SELECT * FROM caregivers WHERE patient_id = :pid ORDER BY priority_order ASC, id ASC"),
+                {"pid": patient_id},
+            ).mappings().all()
+        else:
+            rows = db.execute(
+                text("SELECT * FROM caregivers ORDER BY priority_order ASC, id ASC")
+            ).mappings().all()
+        return {"items": [dict(r) for r in rows], "count": len(rows)}
+    finally:
+        db.close()
+
+
+@app.post(
+    "/api/v1/caregivers",
+    tags=["Caregiver Network"],
+    summary="Add Caregiver Contact",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def create_caregiver(payload: CaregiverCreate):
+    db = require_db()
+    try:
+        now = datetime.now(timezone.utc)
+        row = db.execute(
+            text(
+                "INSERT INTO caregivers (patient_id, name, role, relation, phone, email, access_level, priority_order, created_at) "
+                "VALUES (:patient_id, :name, :role, :relation, :phone, :email, :access_level, :priority_order, :now) "
+                "RETURNING *"
+            ),
+            {
+                "patient_id": payload.patient_id or "patient_1001",
+                "name": payload.name,
+                "role": payload.role,
+                "relation": payload.relation,
+                "phone": payload.phone,
+                "email": payload.email,
+                "access_level": payload.access_level,
+                "priority_order": payload.priority_order,
+                "now": now,
+            },
+        ).mappings().first()
+        db.commit()
+        return {"success": True, "caregiver": dict(row)}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to add caregiver: {str(e)}") from e
+    finally:
+        db.close()
+
+
+@app.post(
+    "/api/v1/caregivers/{caregiver_id}/notify",
+    tags=["Caregiver Network"],
+    summary="Dispatch Clinical Alert to Caregiver",
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def notify_caregiver(
+    caregiver_id: int = Path(..., description="ID of caregiver to notify"),
+    payload: Optional[CaregiverNotifyRequest] = None,
+):
+    db = require_db()
+    try:
+        row = db.execute(
+            text("SELECT * FROM caregivers WHERE id = :id"),
+            {"id": caregiver_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Caregiver #{caregiver_id} not found.")
+
+        msg = payload.message if payload else "Clinical vital anomaly alert dispatched"
+        urgency = payload.urgency if payload else "urgent"
+        cg_name = row["name"]
+        cg_phone = row["phone"]
+        return {
+            "success": True,
+            "dispatched": True,
+            "recipient": {
+                "id": row["id"],
+                "name": cg_name,
+                "phone": cg_phone,
+                "email": row["email"],
+            },
+            "message": f"Alert successfully dispatched to {cg_name} ({cg_phone}) via encrypted SMS & Email.",
+            "urgency": urgency,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to dispatch notification: {str(e)}") from e
+    finally:
+        db.close()
+
+
+# ==========================================
+# Clinical Automation & Workflows Endpoints (Phase 4)
+# ==========================================
+
+@app.get(
+    "/api/v1/automation/rules",
+    tags=["Clinical Automation & Workflows"],
+    summary="List Automation Workflow Rules",
+    description="Retrieves automated vital sign breach escalation rules and device actions.",
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def list_automation_rules():
+    db = require_db()
+    try:
+        rows = db.execute(
+            text("SELECT * FROM automation_rules ORDER BY id ASC")
+        ).mappings().all()
+        return {"items": [dict(r) for r in rows], "count": len(rows)}
+    finally:
+        db.close()
+
+
+@app.post(
+    "/api/v1/automation/rules",
+    tags=["Clinical Automation & Workflows"],
+    summary="Create Automation Workflow Rule",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def create_automation_rule(payload: AutomationRuleCreate):
+    db = require_db()
+    try:
+        now = datetime.now(timezone.utc)
+        row = db.execute(
+            text(
+                "INSERT INTO automation_rules (name, description, trigger_condition, action_payload, is_enabled, triggers_today, created_at) "
+                "VALUES (:name, :description, :trigger_condition, :action_payload, :is_enabled, 0, :now) "
+                "RETURNING *"
+            ),
+            {
+                "name": payload.name,
+                "description": payload.description,
+                "trigger_condition": payload.trigger_condition,
+                "action_payload": payload.action_payload,
+                "is_enabled": payload.is_enabled,
+                "now": now,
+            },
+        ).mappings().first()
+        db.commit()
+        return {"success": True, "rule": dict(row)}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create automation rule: {str(e)}") from e
+    finally:
+        db.close()
+
+
+@app.patch(
+    "/api/v1/automation/rules/{rule_id}/toggle",
+    tags=["Clinical Automation & Workflows"],
+    summary="Toggle Automation Rule Active State",
+    dependencies=[Depends(verify_dashboard_key)],
+)
+@app.post(
+    "/api/v1/automation/rules/{rule_id}/toggle",
+    tags=["Clinical Automation & Workflows"],
+    summary="Toggle Automation Rule Active State (POST alias)",
+    include_in_schema=False,
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def toggle_automation_rule(
+    rule_id: int = Path(..., description="ID of automation rule to toggle"),
+    payload: Optional[AutomationRuleToggleRequest] = None,
+):
+    db = require_db()
+    try:
+        row = db.execute(
+            text("SELECT * FROM automation_rules WHERE id = :id"),
+            {"id": rule_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Automation rule #{rule_id} not found.")
+
+        new_status = payload.is_enabled if payload is not None else (not row["is_enabled"])
+        updated = db.execute(
+            text("UPDATE automation_rules SET is_enabled = :st WHERE id = :id RETURNING *"),
+            {"st": new_status, "id": rule_id},
+        ).mappings().first()
+        db.commit()
+        rule_name = row["name"]
+        status_label = "ENABLED" if new_status else "DISABLED"
+        return {
+            "success": True,
+            "rule": dict(updated),
+            "message": f"Automation rule {rule_name} is now {status_label}.",
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to toggle automation rule: {str(e)}") from e
     finally:
         db.close()

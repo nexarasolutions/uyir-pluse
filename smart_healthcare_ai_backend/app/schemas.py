@@ -57,3 +57,71 @@ class PasswordResetRequest(BaseModel):
 class MessageResponse(BaseModel):
     message: str
     success: bool = True
+
+# ==========================================
+# Alert & Care Schemas (Phase 2 & 4)
+# ==========================================
+
+class SosAlertRequest(BaseModel):
+    device_id: str = Field("esp32_device_01", description="Unique hardware identifier or sender ID")
+    patient_id: Optional[str] = Field(None, description="Patient identifier")
+    severity: Literal["critical", "warning", "info"] = Field("critical", description="Alert severity level")
+    reason: str = Field("Emergency SOS manually triggered from clinical dashboard", description="Incident description")
+    location: Optional[str] = Field("Patient Room / Home", description="Incident location")
+
+class AlertAcknowledgeResponse(BaseModel):
+    success: bool = True
+    alert_id: int
+    status: str
+    acknowledged_at: str
+    message: str
+
+class PrescriptionCreate(BaseModel):
+    patient_id: Optional[str] = Field("patient_1001", description="Patient identifier")
+    name: str = Field(..., description="Medication name", examples=["Atorvastatin"])
+    dosage: str = Field(..., description="Dosage amount", examples=["20mg"])
+    frequency: str = Field("Once daily at bedtime", description="Frequency instructions")
+    doctor: str = Field("Dr. Sharma", description="Prescribing physician")
+    remaining_days: int = Field(24, description="Remaining supply days")
+    total_days: int = Field(30, description="Total supply days")
+    refills_left: int = Field(2, description="Remaining refills")
+    instructions: Optional[str] = Field("Take after dinner with water", description="Special instructions")
+
+class PrescriptionRefillRequest(BaseModel):
+    refills_added: int = Field(1, description="Number of refills to add")
+
+class MedicationDoseCreate(BaseModel):
+    patient_id: Optional[str] = Field("patient_1001", description="Patient identifier")
+    medication_name: str = Field(..., description="Medication name", examples=["Metformin"])
+    time_slot: str = Field("Morning", description="Time slot e.g. Morning, Afternoon, Evening, Night")
+    time_str: str = Field("08:00 AM", description="Display time string")
+    dosage: str = Field("500mg", description="Dosage")
+    notes: Optional[str] = Field("With meal", description="Administration notes")
+    taken: bool = Field(False, description="Whether dose was administered")
+
+class MedicationToggleRequest(BaseModel):
+    taken: bool = Field(..., description="New taken status")
+
+class CaregiverCreate(BaseModel):
+    patient_id: Optional[str] = Field("patient_1001", description="Patient identifier")
+    name: str = Field(..., description="Caregiver full name", examples=["Sarah Jenkins"])
+    role: str = Field("Primary Caregiver", description="Caregiver role")
+    relation: str = Field("Daughter", description="Relationship to patient")
+    phone: str = Field("+1 (555) 382-9901", description="Phone number")
+    email: str = Field("sarah.j@familycare.org", description="Email address")
+    access_level: str = Field("Full Clinical & Alerts", description="Permissions level")
+    priority_order: int = Field(1, description="Contact priority")
+
+class CaregiverNotifyRequest(BaseModel):
+    message: str = Field("Urgent clinical alert update", description="Notification message")
+    urgency: str = Field("urgent", description="Urgency level")
+
+class AutomationRuleCreate(BaseModel):
+    name: str = Field(..., description="Rule name", examples=["Critical Bradycardia Dispatch"])
+    description: str = Field(..., description="Rule description")
+    trigger_condition: str = Field(..., description="Condition expression e.g. HR < 45 for 2 min")
+    action_payload: str = Field(..., description="Action e.g. SMS to Caregiver + Alarm Tone")
+    is_enabled: bool = Field(True, description="Active status")
+
+class AutomationRuleToggleRequest(BaseModel):
+    is_enabled: bool = Field(..., description="Enable or disable flag")

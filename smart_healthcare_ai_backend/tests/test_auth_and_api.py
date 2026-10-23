@@ -156,3 +156,99 @@ def test_telemetry_and_analyze_with_auth_and_keys():
     an_res = r_an.json()
     assert an_res["saved_to_database"] is True
     assert an_res["result"] in ["NO_UNUSUAL_PATTERN", "UNUSUAL_PATTERN"]
+
+
+def test_alert_actions_and_sos():
+    """Verify alert acknowledgment and SOS emergency trigger (Phase 2)."""
+    # 1. Trigger SOS emergency alert
+    sos_payload = {
+        "device_id": "esp32_device_01",
+        "severity": "critical",
+        "reason": "Test unit emergency distress trigger",
+        "location": "Clinical Room 402"
+    }
+    r_sos = client.post(
+        "/api/v1/alerts/sos",
+        json=sos_payload,
+        headers={"X-API-Key": settings.dashboard_api_key}
+    )
+    assert r_sos.status_code == 201
+    sos_data = r_sos.json()
+    assert sos_data["success"] is True
+    assert "alert" in sos_data
+    created_id = sos_data["alert"]["id"]
+    assert sos_data["alert"]["alert_type"] == "MANUAL_SOS"
+
+    # 2. Acknowledge the alert
+    r_ack = client.patch(
+        f"/api/v1/alerts/{created_id}/acknowledge",
+        headers={"X-API-Key": settings.dashboard_api_key}
+    )
+    assert r_ack.status_code == 200
+    ack_data = r_ack.json()
+    assert ack_data["success"] is True
+    assert ack_data["status"] == "acknowledged"
+    assert "acknowledged_at" in ack_data
+
+
+def test_care_and_automation_endpoints():
+    """Verify prescriptions, medications, caregivers, and automation rules (Phase 4)."""
+    headers = {"X-API-Key": settings.dashboard_api_key}
+
+    # 1. Prescriptions
+    r_rx = client.get("/api/v1/prescriptions", headers=headers)
+    assert r_rx.status_code == 200
+    rx_items = r_rx.json()["items"]
+    assert len(rx_items) > 0
+    first_rx_id = rx_items[0]["id"]
+
+    r_refill = client.post(f"/api/v1/prescriptions/{first_rx_id}/refill", headers=headers)
+    assert r_refill.status_code == 200
+    assert r_refill.json()["success"] is True
+
+    # 2. Medications
+    r_meds = client.get("/api/v1/medications", headers=headers)
+    assert r_meds.status_code == 200
+    med_items = r_meds.json()["items"]
+    assert len(med_items) > 0
+    first_med_id = med_items[0]["id"]
+
+    r_toggle = client.patch(
+        f"/api/v1/medications/{first_med_id}/toggle",
+        json={"taken": True},
+        headers=headers
+    )
+    assert r_toggle.status_code == 200
+    assert r_toggle.json()["success"] is True
+    assert r_toggle.json()["medication"]["taken"] is True
+
+    # 3. Caregivers
+    r_cg = client.get("/api/v1/caregivers", headers=headers)
+    assert r_cg.status_code == 200
+    cg_items = r_cg.json()["items"]
+    assert len(cg_items) > 0
+    first_cg_id = cg_items[0]["id"]
+
+    r_notify = client.post(
+        f"/api/v1/caregivers/{first_cg_id}/notify",
+        json={"message": "Routine vital check completed", "urgency": "normal"},
+        headers=headers
+    )
+    assert r_notify.status_code == 200
+    assert r_notify.json()["dispatched"] is True
+
+    # 4. Automation Rules
+    r_rules = client.get("/api/v1/automation/rules", headers=headers)
+    assert r_rules.status_code == 200
+    rules = r_rules.json()["items"]
+    assert len(rules) > 0
+    first_rule_id = rules[0]["id"]
+
+    r_rule_toggle = client.patch(
+        f"/api/v1/automation/rules/{first_rule_id}/toggle",
+        json={"is_enabled": False},
+        headers=headers
+    )
+    assert r_rule_toggle.status_code == 200
+    assert r_rule_toggle.json()["success"] is True
+    assert r_rule_toggle.json()["rule"]["is_enabled"] is False

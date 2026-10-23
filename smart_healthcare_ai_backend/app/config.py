@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     jwt_secret: str = "uyir-plus-secret-key-32-bytes-secure-auth-2026"
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 10080  # 7 days
+    # CORS Configuration
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ]
+    cors_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1|.*\.pinggy\.net|.*\.loca\.lt|.*\.onrender\.com)(:\d+)?$"
     model_config = SettingsConfigDict(env_file=ENV_LOCATIONS, extra="ignore", case_sensitive=False)
 
 settings = Settings()
