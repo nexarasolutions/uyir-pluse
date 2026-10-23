@@ -31,7 +31,7 @@ class Settings(BaseSettings):
         "http://localhost:3001",
         "http://127.0.0.1:3001",
     ]
-    cors_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1|.*\.pinggy\.net|.*\.loca\.lt|.*\.onrender\.com)(:\d+)?$"
+    cors_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1|.*\.pinggy\.net|.*\.loca\.lt|.*\.onrender\.com|.*\.vercel\.app)(:\d+)?$"
     model_config = SettingsConfigDict(env_file=ENV_LOCATIONS, extra="ignore", case_sensitive=False)
 
 settings = Settings()
