@@ -158,6 +158,112 @@ def test_telemetry_and_analyze_with_auth_and_keys():
     assert an_res["result"] in ["NO_UNUSUAL_PATTERN", "UNUSUAL_PATTERN"]
 
 
+def test_telemetry_workflow_empty_and_unknown_device_ids():
+    """Verify empty telemetry (404), unknown device IDs, authentication rejection, and complete ingestion/retrieval cycle."""
+    import uuid
+    fresh_device_id = f"test_probe_{uuid.uuid4().hex[:6]}"
+
+    # 1. Invalid API key or Bearer token is rejected with 401
+    r_unauth = client.get(
+        f"/api/v1/devices/{fresh_device_id}/latest",
+        headers={"X-API-Key": "invalid_bad_key"}
+    )
+    assert r_unauth.status_code == 401
+
+    # 2. Invalid ingestion credentials rejected with 401
+    r_unauth_post = client.post(
+        "/api/v1/measurements",
+        json={"device_id": fresh_device_id},
+        headers={"X-API-Key": "invalid_bad_key"}
+    )
+    assert r_unauth_post.status_code == 401
+
+    # 3. Querying unknown device or empty telemetry before ingestion returns HTTP 404 with 'No telemetry' message
+    r_empty = client.get(
+        f"/api/v1/devices/{fresh_device_id}/latest",
+        headers={"X-API-Key": settings.dashboard_api_key}
+    )
+    assert r_empty.status_code == 404
+    err_data = r_empty.json()
+    assert err_data["error"] is True
+    assert "No telemetry" in err_data["message"]
+
+    # 4. History for unknown device returns HTTP 200 with 0 count
+    r_hist = client.get(
+        f"/api/v1/devices/{fresh_device_id}/history",
+        headers={"X-API-Key": settings.dashboard_api_key}
+    )
+    assert r_hist.status_code == 200
+    assert r_hist.json()["count"] == 0
+    assert r_hist.json()["items"] == []
+
+    # 5. Successful authorized telemetry ingestion
+    meas_payload = {
+        "device_id": fresh_device_id,
+        "patient_id": "patient_probe",
+        "heart_rate_bpm": 72.0,
+        "spo2_percent": 99.0,
+        "temperature_c": 36.5,
+        "sensor_quality": "good",
+        "ecg": 0.14,
+        "bp_systolic": 115.0,
+        "bp_diastolic": 75.0
+    }
+    r_ingest = client.post(
+        "/api/v1/measurements",
+        json=meas_payload,
+        headers={"X-API-Key": settings.device_api_key}
+    )
+    assert r_ingest.status_code == 201
+    ingest_res = r_ingest.json()
+    assert ingest_res["saved_to_database"] is True
+    assert ingest_res["device_id"] == fresh_device_id
+
+    # 6. Successful retrieval now returns 200 with the exact ingested telemetry
+    r_retrieved = client.get(
+        f"/api/v1/devices/{fresh_device_id}/latest",
+        headers={"X-API-Key": settings.dashboard_api_key}
+    )
+    assert r_retrieved.status_code == 200
+    retrieved_data = r_retrieved.json()
+    assert retrieved_data["device_id"] == fresh_device_id
+    assert retrieved_data["heart_rate_bpm"] == 72.0
+    assert retrieved_data["spo2_percent"] == 99.0
+    assert retrieved_data["temperature_c"] == 36.5
+
+    # 7. AI analysis with full 5 clinical features succeeds
+    an_payload = {
+        "heart_rate_bpm": 72.0,
+        "spo2_percent": 99.0,
+        "temperature_c": 36.5,
+        "ecg": 0.14,
+        "bp_systolic": 115.0,
+        "bp_diastolic": 75.0
+    }
+    r_an = client.post(
+        f"/api/v1/devices/{fresh_device_id}/analyze",
+        json=an_payload,
+        headers={"X-API-Key": settings.dashboard_api_key}
+    )
+    assert r_an.status_code == 200
+    assert r_an.json()["saved_to_database"] is True
+    assert r_an.json()["result"] in ["NO_UNUSUAL_PATTERN", "UNUSUAL_PATTERN"]
+
+    # 8. Dispatch hardware edge command
+    cmd_payload = {"command": "trigger_buzzer", "payload": {"duration_ms": 500, "pattern": "sos"}}
+    r_cmd = client.post(
+        f"/api/v1/devices/{fresh_device_id}/command",
+        json=cmd_payload,
+        headers={"X-API-Key": settings.dashboard_api_key}
+    )
+    assert r_cmd.status_code == 200
+    cmd_data = r_cmd.json()
+    assert cmd_data["success"] is True
+    assert cmd_data["command"] == "trigger_buzzer"
+    assert cmd_data["status"] == "dispatched"
+    assert "command_id" in cmd_data
+
+
 def test_alert_actions_and_sos():
     """Verify alert acknowledgment and SOS emergency trigger (Phase 2)."""
     # 1. Trigger SOS emergency alert
@@ -252,3 +358,18 @@ def test_care_and_automation_endpoints():
     assert r_rule_toggle.status_code == 200
     assert r_rule_toggle.json()["success"] is True
     assert r_rule_toggle.json()["rule"]["is_enabled"] is False
+
+
+def test_send_device_command():
+    """Verify dispatching actuation commands to IoT edge hardware."""
+    headers = {"X-API-Key": settings.dashboard_api_key}
+    r = client.post(
+        "/api/v1/devices/esp32_device_01/command",
+        json={"command": "TEST_BUZZER", "payload": {"duration_ms": 1000}},
+        headers=headers,
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["success"] is True
+    assert data["command"] == "TEST_BUZZER"
+    assert data["device_id"] == "esp32_device_01"

@@ -1,4 +1,12 @@
+import sys
+from pathlib import Path
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
 from app.analysis import analyze_values, get_models_status
+
 
 def test_model_loading_and_status():
     """Verify that all three original models are successfully loaded from disk."""

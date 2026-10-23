@@ -125,3 +125,14 @@ class AutomationRuleCreate(BaseModel):
 
 class AutomationRuleToggleRequest(BaseModel):
     is_enabled: bool = Field(..., description="Enable or disable flag")
+
+
+class DeviceCommandIn(BaseModel):
+    command: str = Field(..., description="Actionable command identifier", examples=["trigger_buzzer", "calibrate_sensor", "flash_led"])
+    payload: Optional[dict] = Field(default_factory=dict, description="Command parameters or metadata")
+
+
+
+class DeviceCommandRequest(BaseModel):
+    command: str = Field(..., description="Actuation command e.g. TEST_BUZZER, CALIBRATE_OPTICAL_LED, SYNC_FIRMWARE")
+    payload: Optional[dict] = Field(default_factory=dict, description="Optional command parameters")

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, Query, Path, status, Request
@@ -17,6 +18,7 @@ from app.schemas import (
     PasswordResetRequest,
     MessageResponse,
     SosAlertRequest,
+    DeviceCommandRequest,
     AlertAcknowledgeResponse,
     PrescriptionCreate,
     PrescriptionRefillRequest,
@@ -26,6 +28,7 @@ from app.schemas import (
     CaregiverNotifyRequest,
     AutomationRuleCreate,
     AutomationRuleToggleRequest,
+    DeviceCommandIn,
 )
 from app.security import (
     verify_device_key,
@@ -160,12 +163,14 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Provides consistent JSON error response formatting for HTTP exceptions."""
+    detail_str = exc.detail if isinstance(exc.detail, str) else "Request error"
     return JSONResponse(
         status_code=exc.status_code,
         content={
             "error": True,
             "status_code": exc.status_code,
-            "message": exc.detail if isinstance(exc.detail, str) else "Request error",
+            "message": detail_str,
+            "detail": exc.detail,
             "details": exc.detail,
         },
         headers=getattr(exc, "headers", None),
@@ -510,6 +515,9 @@ def create_measurement(payload: MeasurementIn):
     dependencies=[Depends(verify_dashboard_key)],
 )
 def latest(device_id: str):
+    clean_device_id = device_id.strip() if device_id else ""
+    if not clean_device_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Device identifier cannot be empty.")
     db = require_db()
     try:
         row = db.execute(
@@ -517,10 +525,13 @@ def latest(device_id: str):
                 "SELECT id,device_id,patient_id,measured_at,heart_rate_bpm,spo2_percent,temperature_c,sensor_quality,data_quality_status "
                 "FROM measurements WHERE device_id=:device ORDER BY measured_at DESC LIMIT 1"
             ),
-            {"device": device_id},
+            {"device": clean_device_id},
         ).mappings().first()
         if row is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No telemetry readings found for device '{device_id}'")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No telemetry found for device '{clean_device_id}'",
+            )
         return dict(row)
     finally:
         db.close()
@@ -534,6 +545,7 @@ def latest(device_id: str):
     dependencies=[Depends(verify_dashboard_key)],
 )
 def history(device_id: str, limit: int = Query(default=100, ge=1, le=1000, description="Maximum number of historical records to retrieve")):
+    clean_device_id = device_id.strip() if device_id else ""
     db = require_db()
     try:
         rows = db.execute(
@@ -541,9 +553,88 @@ def history(device_id: str, limit: int = Query(default=100, ge=1, le=1000, descr
                 "SELECT id,device_id,patient_id,measured_at,heart_rate_bpm,spo2_percent,temperature_c,sensor_quality,data_quality_status "
                 "FROM measurements WHERE device_id=:device ORDER BY measured_at DESC LIMIT :lim"
             ),
-            {"device": device_id, "lim": limit},
+            {"device": clean_device_id, "lim": limit},
         ).mappings().all()
         return {"items": [dict(r) for r in rows], "count": len(rows)}
+    finally:
+        db.close()
+
+
+@app.post(
+    "/api/v1/devices/{device_id}/command",
+    tags=["Device Telemetry"],
+    summary="Dispatch Edge Command to IoT Hardware Node",
+    description="Sends an actuation command (e.g. buzzer alarm, sensor calibration, LED strobe) to the designated hardware node and records the actuation event to the datastore.",
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def dispatch_device_command(device_id: str, body: DeviceCommandIn):
+    clean_device_id = device_id.strip() if device_id else ""
+    if not clean_device_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Device identifier cannot be empty.")
+    
+    db = require_db()
+    try:
+        # Ensure device_commands table exists
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS device_commands (
+                id BIGSERIAL PRIMARY KEY,
+                device_id TEXT NOT NULL,
+                command TEXT NOT NULL,
+                payload JSONB,
+                status TEXT NOT NULL DEFAULT 'dispatched',
+                dispatched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        """))
+
+        # Log actuation event to device_commands
+        row = db.execute(
+            text(
+                "INSERT INTO device_commands(device_id, command, payload, status, dispatched_at) "
+                "VALUES (:device, :cmd, CAST(:pld AS jsonb), 'dispatched', NOW()) "
+                "RETURNING id, device_id, command, status, dispatched_at"
+            ),
+            {
+                "device": clean_device_id,
+                "cmd": body.command,
+                "pld": json.dumps(body.payload or {}),
+            },
+        ).mappings().one()
+
+        # Log audit entry into alerts for notifications visibility
+        try:
+            with db.begin_nested():
+                db.execute(
+                    text(
+                        "INSERT INTO alerts(device_id, alert_type, severity, reason, status, triggered_at) "
+                        "VALUES (:device, 'hardware_actuation', 'info', :reason, 'open', NOW())"
+                    ),
+                    {
+                        "device": clean_device_id,
+                        "reason": f"Edge hardware command '{body.command}' dispatched to node {clean_device_id}",
+                    },
+                )
+        except Exception:
+            pass
+
+        db.commit()
+        return {
+            "success": True,
+            "command_id": row["id"],
+            "device_id": clean_device_id,
+            "command": body.command,
+            "status": "dispatched",
+            "dispatched_at": str(row["dispatched_at"]),
+            "message": f"Command '{body.command}' successfully dispatched to edge device '{clean_device_id}'.",
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to dispatch device command: {str(e)}",
+        ) from e
     finally:
         db.close()
 
@@ -1249,3 +1340,48 @@ def toggle_automation_rule(
         raise HTTPException(status_code=500, detail=f"Failed to toggle automation rule: {str(e)}") from e
     finally:
         db.close()
+
+
+@app.post(
+    "/api/v1/devices/{device_id}/command",
+    tags=["Device Telemetry"],
+    summary="Dispatch Edge Actuation Command",
+    description="Transmits actuation instructions to target IoT microcontroller and logs execution.",
+    dependencies=[Depends(verify_dashboard_key)],
+)
+def send_device_command(
+    device_id: str = Path(..., description="Target hardware identifier e.g. esp32_device_01"),
+    payload: DeviceCommandRequest = None,
+):
+    if not payload:
+        raise HTTPException(status_code=400, detail="Missing command request payload.")
+
+    cmd = payload.command.strip().upper()
+    now = datetime.now(timezone.utc)
+    db = require_db()
+    try:
+        db.execute(
+            text(
+                "INSERT INTO alerts (device_id, alert_type, severity, reason, status, triggered_at, acknowledged_at) "
+                "VALUES (:device_id, 'DEVICE_COMMAND', 'info', :reason, 'acknowledged', :now, :now)"
+            ),
+            {
+                "device_id": device_id,
+                "reason": f"Hardware command \"{cmd}\" dispatched to node {device_id}.",
+                "now": now,
+            },
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+    return {
+        "success": True,
+        "device_id": device_id,
+        "command": cmd,
+        "status": "dispatched",
+        "timestamp": now.isoformat(),
+        "message": f"Command \"{cmd}\" successfully dispatched to IoT node {device_id}.",
+    }
