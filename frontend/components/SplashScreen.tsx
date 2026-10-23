@@ -2,64 +2,69 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, ShieldCheck, Cpu, CheckCircle2 } from "lucide-react";
+import { useRouter, usePathname } from "next/navigation";
+import { getStoredToken, getStoredUser } from "@/lib/api";
 
 export default function SplashScreen() {
+  const router = useRouter();
+  const pathname = usePathname();
   const [mounted, setMounted] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [statusText, setStatusText] = useState("INITIALIZING SECURE TELEMETRY BUS...");
-  const [isFading, setIsFading] = useState(false);
-  const [hidden, setHidden] = useState(false);
+  const [stage, setStage] = useState<"initial" | "scale-down" | "fade-out" | "done">("initial");
 
   useEffect(() => {
-    // Only show on client
     setMounted(true);
 
-    // Check if splash was already shown during this browser session
+    // If already seen in this session or on the sign-in page, skip splash
     try {
-      const alreadyShown = sessionStorage.getItem("uyir_splash_shown");
-      if (alreadyShown === "true") {
-        setHidden(true);
+      const alreadySeen = sessionStorage.getItem("uyir_splash_shown");
+      if (alreadySeen === "true" || pathname === "/sign-in") {
+        setStage("done");
         return;
       }
     } catch {
-      // Ignore storage restrictions
+      // Ignore
     }
 
-    const startTime = Date.now();
-    const totalDuration = 1800; // 1.8 seconds total immersive experience
+    // Stage 1: Big Logo Entrance (0ms)
+    // Stage 2: Smooth Zomato-style Scale Down (350ms)
+    const scaleTimer = setTimeout(() => {
+      setStage("scale-down");
+    }, 400);
 
-    const interval = setInterval(() => {
-      const elapsed = Date.now() - startTime;
-      const currentPct = Math.min(100, Math.floor((elapsed / totalDuration) * 100));
-      setProgress(currentPct);
-
-      if (currentPct < 30) {
-        setStatusText("INITIALIZING SECURE TELEMETRY BUS...");
-      } else if (currentPct < 65) {
-        setStatusText("CONNECTING NEURAL ANOMALY DETECTOR...");
-      } else if (currentPct < 90) {
-        setStatusText("SYNCHRONIZING PATIENT VITALS & IOT NODES...");
-      } else {
-        setStatusText("SYSTEM READY — SMART HEALTHCARE FOR BRIGHTER TOMORROWS");
+    // Stage 3: Smooth Dissolve & Smart Navigation (1500ms)
+    const fadeTimer = setTimeout(() => {
+      setStage("fade-out");
+      try {
+        sessionStorage.setItem("uyir_splash_shown", "true");
+      } catch {
+        // Ignore
       }
 
-      if (elapsed >= totalDuration) {
-        clearInterval(interval);
-        try {
-          sessionStorage.setItem("uyir_splash_shown", "true");
-        } catch {
-          // Ignore
-        }
-        setIsFading(true);
+      // Check authentication status
+      const hasToken = getStoredToken();
+      const hasUser = getStoredUser();
+
+      if (!hasToken && !hasUser) {
+        // New user -> direct to sign up / sign in
         setTimeout(() => {
-          setHidden(true);
-        }, 500); // 500ms fade transition
+          setStage("done");
+          if (pathname !== "/sign-in") {
+            router.push("/sign-in");
+          }
+        }, 400);
+      } else {
+        // Logged in user -> direct to dashboard
+        setTimeout(() => {
+          setStage("done");
+        }, 400);
       }
-    }, 25);
+    }, 1500);
 
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      clearTimeout(scaleTimer);
+      clearTimeout(fadeTimer);
+    };
+  }, [pathname, router]);
 
   const handleSkip = () => {
     try {
@@ -67,29 +72,33 @@ export default function SplashScreen() {
     } catch {
       // Ignore
     }
-    setIsFading(true);
-    setTimeout(() => setHidden(true), 300);
+    setStage("fade-out");
+    const hasToken = getStoredToken();
+    const hasUser = getStoredUser();
+    setTimeout(() => {
+      setStage("done");
+      if (!hasToken && !hasUser && pathname !== "/sign-in") {
+        router.push("/sign-in");
+      }
+    }, 250);
   };
 
-  if (!mounted || hidden) return null;
+  if (!mounted || stage === "done") return null;
 
   return (
     <div
       onClick={handleSkip}
-      className={`fixed inset-0 z-[100] flex flex-col items-center justify-center bg-[#060B26] select-none transition-all duration-500 cursor-pointer ${
-        isFading ? "opacity-0 scale-105 pointer-events-none" : "opacity-100 scale-100"
+      className={`fixed inset-0 z-[100] flex flex-col items-center justify-center bg-[#060B26] select-none transition-all duration-500 cursor-pointer overflow-hidden ${
+        stage === "fade-out" ? "opacity-0 scale-105 pointer-events-none" : "opacity-100"
       }`}
-      aria-label="UYIR PLUS Loading Screen"
-      role="dialog"
-      aria-modal="true"
+      aria-label="UYIR PLUS Splash Screen"
     >
-      {/* Background radial glow */}
+      {/* Background ambient lighting */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute -top-[20%] left-1/2 -translate-x-1/2 w-[700px] h-[700px] rounded-full bg-radial from-cyan/20 via-brand/10 to-transparent blur-3xl animate-pulse" />
-        <div className="absolute -bottom-[20%] left-1/2 -translate-x-1/2 w-[600px] h-[600px] rounded-full bg-radial from-ok/15 via-cyan/10 to-transparent blur-3xl" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full bg-gradient-to-tr from-cyan/20 via-brand/15 to-ok/20 blur-3xl opacity-80" />
       </div>
 
-      {/* Skip button in top right */}
+      {/* Skip button for instant bypass */}
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -97,34 +106,38 @@ export default function SplashScreen() {
         }}
         className="absolute top-6 right-6 px-3.5 py-1.5 rounded-full border border-white/10 bg-white/5 text-[11px] font-mono text-muted hover:text-white hover:border-white/30 backdrop-blur-md transition z-20"
       >
-        Skip Intro ✕
+        Skip ✕
       </button>
 
-      {/* Main Content Card */}
-      <div className="relative z-10 flex flex-col items-center max-w-lg px-6 text-center">
-        {/* Authentic Exact Logo Container with Ambient Glow */}
-        <div className="relative mb-6 group">
-          <div className="absolute -inset-4 rounded-3xl bg-gradient-to-r from-cyan/30 via-brand/20 to-ok/30 blur-2xl opacity-75 animate-pulse" />
-          <div className="relative bg-card/40 backdrop-blur-2xl p-6 rounded-3xl border border-white/15 shadow-[0_20px_60px_rgba(0,0,0,0.6)]">
-            <img
-              src="/logo.png"
-              alt="UYIR PLUS - Smart Healthcare for Brighter Tomorrows"
-              className="h-20 sm:h-24 md:h-28 w-auto object-contain filter drop-shadow-[0_8px_24px_rgba(0,210,255,0.35)]"
-            />
-          </div>
+      {/* Zomato-Style Big-to-Small Logo Transition Container */}
+      <div className="relative z-10 flex flex-col items-center justify-center px-6 text-center">
+        <div
+          className={`transition-all duration-700 ease-out transform ${
+            stage === "initial"
+              ? "scale-[1.35] opacity-90 drop-shadow-[0_0_40px_rgba(0,210,255,0.7)]"
+              : "scale-[0.88] opacity-100 drop-shadow-[0_0_20px_rgba(0,210,255,0.4)]"
+          }`}
+        >
+          <img
+            src="/logo.png"
+            alt="UYIR PLUS - Smart Healthcare for Brighter Tomorrows"
+            className="h-24 sm:h-32 md:h-36 w-auto object-contain filter"
+          />
         </div>
 
-        {/* Dynamic ECG Heartbeat SVG Wave */}
-        <div className="w-full max-w-xs h-10 mb-4 overflow-hidden relative">
+        {/* Minimalist Cardiac Pulse Wave Accent */}
+        <div
+          className={`w-48 h-6 mt-4 overflow-hidden transition-all duration-500 ${
+            stage === "initial" ? "opacity-30 scale-95" : "opacity-100 scale-100"
+          }`}
+        >
           <svg
-            viewBox="0 0 300 40"
+            viewBox="0 0 200 30"
             className="w-full h-full stroke-cyan fill-none"
-            style={{
-              filter: "drop-shadow(0 0 6px rgba(0, 210, 255, 0.75))",
-            }}
+            style={{ filter: "drop-shadow(0 0 6px rgba(0, 210, 255, 0.8))" }}
           >
             <path
-              d="M0 20 L60 20 L75 5 L85 35 L95 10 L105 25 L115 20 L180 20 L195 5 L205 35 L215 10 L225 25 L235 20 L300 20"
+              d="M0 15 L40 15 L50 5 L60 25 L70 8 L80 20 L90 15 L140 15 L150 5 L160 25 L170 15 L200 15"
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -133,37 +146,13 @@ export default function SplashScreen() {
           </svg>
         </div>
 
-        {/* Progress bar */}
-        <div className="w-64 sm:w-80 h-1.5 rounded-full bg-white/10 overflow-hidden mb-3 p-[1px]">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-cyan via-brand to-ok transition-all duration-75 shadow-[0_0_12px_rgba(0,210,255,0.8)]"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-
-        {/* Status text & percentage */}
-        <div className="flex items-center justify-between w-64 sm:w-80 text-[10px] font-mono uppercase tracking-wider text-muted">
-          <span className="truncate pr-2 text-cyan font-semibold">{statusText}</span>
-          <span className="text-white shrink-0">{progress}%</span>
-        </div>
-
-        {/* Security badges */}
-        <div className="mt-8 flex items-center justify-center gap-4 text-[10px] text-muted/80">
-          <div className="flex items-center gap-1.5">
-            <ShieldCheck size={12} className="text-ok" />
-            <span>HIPAA Compliant</span>
-          </div>
-          <span className="text-white/20">•</span>
-          <div className="flex items-center gap-1.5">
-            <Cpu size={12} className="text-cyan" />
-            <span>AI Telemetry Core</span>
-          </div>
-          <span className="text-white/20">•</span>
-          <div className="flex items-center gap-1.5">
-            <Activity size={12} className="text-brand" />
-            <span>Real-Time Vitals</span>
-          </div>
-        </div>
+        <p
+          className={`mt-2 text-[10px] sm:text-xs font-mono uppercase tracking-[0.25em] text-cyan/90 transition-all duration-500 ${
+            stage === "initial" ? "opacity-0 translate-y-2" : "opacity-100 translate-y-0"
+          }`}
+        >
+          Smart Healthcare for Brighter Tomorrows
+        </p>
       </div>
     </div>
   );

@@ -26,15 +26,30 @@ export default function Profile() {
   const [emailDigest, setEmailDigest] = useState(false);
   const [savedFeedback, setSavedFeedback] = useState<string | null>(null);
 
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [editDept, setEditDept] = useState("");
+  const [editEmergency, setEditEmergency] = useState("");
+
   useEffect(() => {
     // 1. Initial cached user
     const local = getStoredUser();
-    if (local) setUser(local);
+    if (local) {
+      setUser(local);
+      setEditName(local.full_name || "");
+      setEditPhone(local.phone || "");
+      setEditDept(local.department || "");
+      setEditEmergency(local.emergency_contact || "");
+    }
 
     // 2. Fetch fresh profile from backend
     fetchUserProfile().then((res) => {
       if (res.ok && res.data) {
-        setUser(res.data);
+        setUser((prev) => {
+          const merged = { ...res.data, ...prev };
+          return merged;
+        });
       }
     });
 
@@ -56,6 +71,25 @@ export default function Profile() {
     }
   }, []);
 
+  const handleSaveProfile = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    const updated: UserProfile = {
+      ...user,
+      full_name: editName.trim() || user.full_name,
+      phone: editPhone.trim() || user.phone,
+      department: editDept.trim() || user.department,
+      emergency_contact: editEmergency.trim() || user.emergency_contact,
+    };
+    setUser(updated);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("uyir_auth_user", JSON.stringify(updated));
+    }
+    setIsEditing(false);
+    setSavedFeedback("Clinical profile details updated successfully.");
+    setTimeout(() => setSavedFeedback(null), 3000);
+  };
+
   const savePrefs = (updates: Record<string, boolean>) => {
     if (typeof window !== "undefined") {
       const current = {
@@ -75,42 +109,45 @@ export default function Profile() {
   const displayName = user?.full_name || "Alexander Bennett";
   const displayEmail = user?.email || "patient_1001@uyir.org";
   const displayRole = user?.role || "patient";
+  const displayPhone = user?.phone || "+91 98765 43210";
+  const displayDept = user?.department || "Cardiac Telemetry & Vital Monitoring";
+  const displayEmergency = user?.emergency_contact || "+91 91100 88990 (EMS Zone 4)";
 
   return (
     <div className="space-y-6">
       {/* Profile Header */}
-      <section className="glass flex flex-wrap items-center justify-between gap-6 p-6">
-        <div className="flex items-center gap-5">
+      <section className="glass flex flex-wrap items-center justify-between gap-4 sm:gap-6 p-4 sm:p-6">
+        <div className="flex items-center gap-4 sm:gap-5">
           <div className="relative">
-            <span className="grid h-16 w-16 place-items-center rounded-2xl bg-menu text-cyan shadow-[0_0_20px_rgba(0,117,255,.5)]">
-              <UserCircle size={48} />
+            <span className="grid h-14 w-14 sm:h-16 sm:w-16 place-items-center rounded-2xl bg-menu text-cyan shadow-[0_0_20px_rgba(0,117,255,.5)]">
+              <UserCircle size={44} />
             </span>
-            <span className="absolute bottom-0 right-0 h-4 w-4 rounded-full bg-ok border-2 border-base" />
+            <span className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full bg-ok border-2 border-base" />
           </div>
 
           <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-xl font-bold text-white">{displayName}</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-lg sm:text-xl font-bold text-white">{displayName}</h2>
               <span className="rounded-full bg-cyan/20 text-cyan px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider font-mono">
                 {displayRole}
               </span>
             </div>
-            <p className="text-xs text-muted mt-0.5">
-              Email: <span className="font-mono text-white">{displayEmail}</span> • Device:{" "}
+            <p className="text-xs text-muted mt-0.5 break-all">
+              Email: <span className="font-mono text-white">{displayEmail}</span> • Node:{" "}
               <span className="font-mono text-cyan font-semibold">esp32_device_01</span>
             </p>
           </div>
         </div>
 
         {/* Tab Navigation */}
-        <div role="tablist" className="glass flex gap-1 p-1">
+        <div role="tablist" className="glass flex gap-1 p-1 w-full sm:w-auto justify-center">
           {TABS.map((t) => (
             <button
               key={t}
               role="tab"
               aria-selected={tab === t}
               onClick={() => setTab(t)}
-              className={`rounded-xl px-4 py-2 text-xs font-bold transition duration-200 ${
+              className={`flex-1 sm:flex-none rounded-xl px-3 sm:px-4 py-2 text-xs font-bold transition duration-200 ${
                 tab === t ? "bg-white/15 text-white" : "text-muted hover:text-white"
               }`}
             >
@@ -129,48 +166,121 @@ export default function Profile() {
 
       {/* Tab Panels */}
       {tab === "Overview" && (
-        <div className="grid gap-6 md:grid-cols-2">
-          {/* Medical Information */}
-          <section className="glass p-6">
-            <h3 className="font-bold text-xs uppercase tracking-wider text-muted mb-4">Account & Clinical Profile</h3>
-            <div className="grid grid-cols-2 gap-4 text-xs">
-              <div className="rounded-xl border border-white/10 bg-base/50 p-3">
-                <span className="text-muted text-[11px]">Primary Role</span>
-                <p className="font-bold text-white mt-1 uppercase font-mono">{displayRole}</p>
+        <div className="space-y-6">
+          <div className="grid gap-6 md:grid-cols-2">
+            {/* Account & Role Card */}
+            <section className="glass p-5 sm:p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold text-xs uppercase tracking-wider text-muted">
+                  Account & Clinical Metadata
+                </h3>
+                <button
+                  onClick={() => setIsEditing(!isEditing)}
+                  className="text-xs text-cyan hover:underline font-bold"
+                >
+                  {isEditing ? "Cancel" : "Edit Profile"}
+                </button>
               </div>
-              <div className="rounded-xl border border-white/10 bg-base/50 p-3">
-                <span className="text-muted text-[11px]">Assigned IoT Node</span>
-                <p className="font-bold text-cyan mt-1 font-mono">esp32_device_01</p>
-              </div>
-              <div className="rounded-xl border border-white/10 bg-base/50 p-3">
-                <span className="text-muted text-[11px]">Status</span>
-                <p className="font-bold text-ok mt-1">Active Monitoring</p>
-              </div>
-              <div className="rounded-xl border border-white/10 bg-base/50 p-3">
-                <span className="text-muted text-[11px]">Enrolled Datastore</span>
-                <p className="font-bold text-warn mt-1">Supabase PostgreSQL</p>
-              </div>
-            </div>
-          </section>
 
-          {/* Contact Details */}
-          <section className="glass p-6">
-            <h3 className="font-bold text-xs uppercase tracking-wider text-muted mb-4">Contact & Location</h3>
-            <div className="space-y-3 text-xs">
-              <div className="flex items-center gap-3 p-3 rounded-xl border border-white/10 bg-base/50">
-                <Mail size={14} className="text-cyan shrink-0" />
-                <span className="text-white font-mono">{displayEmail}</span>
+              <div className="grid grid-cols-2 gap-3 sm:gap-4 text-xs">
+                <div className="rounded-xl border border-white/10 bg-base/50 p-3">
+                  <span className="text-muted text-[11px]">Primary Role</span>
+                  <p className="font-bold text-white mt-1 uppercase font-mono">{displayRole}</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-base/50 p-3">
+                  <span className="text-muted text-[11px]">Assigned IoT Node</span>
+                  <p className="font-bold text-cyan mt-1 font-mono">esp32_device_01</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-base/50 p-3">
+                  <span className="text-muted text-[11px]">Department / Unit</span>
+                  <p className="font-bold text-white mt-1 truncate">{displayDept}</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-base/50 p-3">
+                  <span className="text-muted text-[11px]">Account Status</span>
+                  <p className="font-bold text-ok mt-1">Active Verified</p>
+                </div>
               </div>
-              <div className="flex items-center gap-3 p-3 rounded-xl border border-white/10 bg-base/50">
-                <Phone size={14} className="text-cyan shrink-0" />
-                <span className="font-mono text-white">+1 (555) 234-8901 (Careline)</span>
+            </section>
+
+            {/* Contact Details Card */}
+            <section className="glass p-5 sm:p-6">
+              <h3 className="font-bold text-xs uppercase tracking-wider text-muted mb-4">
+                Contact & Communication Lines
+              </h3>
+              <div className="space-y-3 text-xs">
+                <div className="flex items-center gap-3 p-3 rounded-xl border border-white/10 bg-base/50">
+                  <Mail size={14} className="text-cyan shrink-0" />
+                  <span className="text-white font-mono break-all">{displayEmail}</span>
+                </div>
+                <div className="flex items-center gap-3 p-3 rounded-xl border border-white/10 bg-base/50">
+                  <Phone size={14} className="text-cyan shrink-0" />
+                  <span className="font-mono text-white">{displayPhone}</span>
+                </div>
+                <div className="flex items-center gap-3 p-3 rounded-xl border border-white/10 bg-base/50">
+                  <MapPin size={14} className="text-cyan shrink-0" />
+                  <span className="text-white">{displayDept}</span>
+                </div>
               </div>
-              <div className="flex items-center gap-3 p-3 rounded-xl border border-white/10 bg-base/50">
-                <MapPin size={14} className="text-cyan shrink-0" />
-                <span className="text-white">Emergency Zone 4 • Cardiac Monitoring Unit</span>
+            </section>
+          </div>
+
+          {/* Edit Profile Form */}
+          {isEditing && (
+            <form onSubmit={handleSaveProfile} className="glass p-5 sm:p-6 space-y-4 animate-fade-in">
+              <h3 className="font-bold text-sm text-white">Update Real Profile Information</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-white block mb-1">Full Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className="field text-base sm:text-xs min-h-[42px]"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-white block mb-1">Contact Phone</label>
+                  <input
+                    type="tel"
+                    value={editPhone}
+                    onChange={(e) => setEditPhone(e.target.value)}
+                    className="field text-base sm:text-xs min-h-[42px]"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-white block mb-1">Department / Hospital Unit</label>
+                  <input
+                    type="text"
+                    value={editDept}
+                    onChange={(e) => setEditDept(e.target.value)}
+                    className="field text-base sm:text-xs min-h-[42px]"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-white block mb-1">Emergency Careline Contact</label>
+                  <input
+                    type="text"
+                    value={editEmergency}
+                    onChange={(e) => setEditEmergency(e.target.value)}
+                    className="field text-base sm:text-xs min-h-[42px]"
+                  />
+                </div>
               </div>
-            </div>
-          </section>
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditing(false)}
+                  className="btn-ghost py-2 px-4 text-xs"
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn py-2 px-6 text-xs font-bold">
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       )}
 

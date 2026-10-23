@@ -1,5 +1,11 @@
-import { redirect } from "next/navigation";
+"use client";
+
+import SplashScreen from "@/components/SplashScreen";
 
 export default function Home() {
-  redirect("/dashboard");
+  return (
+    <main className="min-h-screen bg-[#060B26]">
+      <SplashScreen />
+    </main>
+  );
 }

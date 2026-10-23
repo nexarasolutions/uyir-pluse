@@ -58,6 +58,10 @@ export interface UserProfile {
   email: string;
   full_name?: string | null;
   role: "doctor" | "patient" | "nurse" | "admin" | string;
+  phone?: string | null;
+  department?: string | null;
+  emergency_contact?: string | null;
+  blood_group?: string | null;
   created_at?: string | null;
   last_sign_in_at?: string | null;
 }
@@ -148,6 +152,8 @@ export interface PrescriptionItem {
   total_days: number;
   refills_left: number;
   instructions?: string | null;
+  document_url?: string | null;
+  document_name?: string | null;
   created_at?: string;
 }
 
@@ -570,7 +576,9 @@ export const signupUser = async (
   email: string,
   password: string,
   fullName?: string,
-  role: "doctor" | "patient" | "nurse" | "admin" = "patient"
+  role: "doctor" | "patient" | "nurse" | "admin" = "patient",
+  phone?: string,
+  department?: string
 ): Promise<ApiResult<AuthResponse>> => {
   const res = await apiPost<AuthResponse>("/api/v1/auth/signup", {
     email,
@@ -579,8 +587,15 @@ export const signupUser = async (
     role,
   });
   if (res.ok) {
+    const updatedUser: UserProfile = {
+      ...res.data.user,
+      full_name: fullName || res.data.user.full_name,
+      role: role || res.data.user.role,
+      phone: phone || null,
+      department: department || null,
+    };
     setStoredToken(res.data.access_token);
-    setStoredUser(res.data.user);
+    setStoredUser(updatedUser);
   }
   return res;
 };
