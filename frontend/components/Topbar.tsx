@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import { useEffect, useState } from "react";
@@ -53,7 +54,7 @@ export default function Topbar({ onOpenMobile }: { onOpenMobile?: () => void }) 
   };
 
   return (
-    <header className="flex items-center justify-between px-2 py-4">
+    <header className="flex items-center justify-between px-2 py-4 border-b border-white/5 mb-2">
       <div className="flex items-center gap-3">
         {onOpenMobile && (
           <button
@@ -64,9 +65,24 @@ export default function Topbar({ onOpenMobile }: { onOpenMobile?: () => void }) 
             <Menu size={20} />
           </button>
         )}
-        <div>
-          <p className="text-xs text-muted">Pages / {title}</p>
-          <h1 className="text-lg font-bold">{title}</h1>
+
+        {/* Mobile Header Official Logo */}
+        <Link href="/dashboard" className="flex items-center md:hidden">
+          <img
+            src="/logo.png"
+            alt="UYIR PLUS"
+            className="h-8 w-auto max-w-[160px] object-contain drop-shadow-[0_2px_8px_rgba(0,210,255,0.25)]"
+          />
+        </Link>
+
+        {/* Desktop Breadcrumb & Module Title */}
+        <div className="hidden md:block">
+          <p className="text-xs text-muted flex items-center gap-1.5">
+            <span className="text-muted/80">UYIR PLUS</span>
+            <span className="text-white/20">/</span>
+            <span className="text-cyan font-medium">{title}</span>
+          </p>
+          <h1 className="text-lg font-bold tracking-tight text-white">{title}</h1>
         </div>
       </div>
 

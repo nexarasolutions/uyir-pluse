@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
+import SplashScreen from "./SplashScreen";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -10,6 +11,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen">
+      <SplashScreen />
       <Sidebar
         collapsed={collapsed}
         onToggle={() => setCollapsed((c) => !c)}

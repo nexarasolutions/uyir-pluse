@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import Link from "next/link";
@@ -21,10 +22,31 @@ export default function Sidebar({
   const navContent = (
     <>
       <div className="flex items-center justify-between px-2 pb-4 border-b border-white/10">
-        <div className="flex items-center gap-3">
-          <HeartPulse className="text-cyan shrink-0" size={24} />
-          {(!collapsed || mobileOpen) && (
-            <span className="font-bold tracking-[0.2em] text-sm text-white">UYIR PLUS</span>
+        <div className="flex items-center">
+          {(!collapsed || mobileOpen) ? (
+            <Link
+              href="/dashboard"
+              className="flex items-center gap-2 transition duration-200 group hover:opacity-95"
+            >
+              <img
+                src="/logo.png"
+                alt="UYIR PLUS"
+                className="h-10 w-auto max-w-[195px] object-contain drop-shadow-[0_2px_10px_rgba(0,210,255,0.25)]"
+              />
+            </Link>
+          ) : (
+            <Link
+              href="/dashboard"
+              className="h-10 w-10 mx-auto rounded-xl overflow-hidden flex items-center justify-center bg-card/80 border border-white/10 hover:border-cyan/50 shadow-sm transition"
+              title="UYIR PLUS - Dashboard"
+            >
+              <img
+                src="/logo.png"
+                alt="UYIR PLUS"
+                className="h-9 w-auto max-w-none object-left object-contain"
+                style={{ transform: "scale(2.4) translateX(11px)" }}
+              />
+            </Link>
           )}
         </div>
         {mobileOpen && (

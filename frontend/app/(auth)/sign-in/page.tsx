@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import { useState } from "react";
@@ -51,12 +52,18 @@ export default function SignIn() {
   return (
     <main className="grid min-h-screen place-items-center p-4">
       <form onSubmit={handleSubmit} className="glass page-in w-full max-w-md p-8" aria-labelledby="t">
-        <HeartPulse className="mx-auto text-cyan animate-pulse" size={36} />
-        <h1 id="t" className="mt-3 text-center text-2xl font-bold">
+        <div className="flex justify-center mb-5">
+          <img
+            src="/logo.png"
+            alt="UYIR PLUS - Smart Healthcare for Brighter Tomorrows"
+            className="h-14 sm:h-16 w-auto object-contain drop-shadow-[0_4px_16px_rgba(0,210,255,0.35)]"
+          />
+        </div>
+        <h1 id="t" className="text-center text-xl font-bold">
           {isSignUp ? "Create Clinician Account" : "Welcome back to Uyir+"}
         </h1>
         <p className="mb-6 text-center text-xs text-muted">
-          Your Health. Your Care. Your Peace of Mind.
+          Smart Healthcare for Brighter Tomorrows
         </p>
 
         {errorMsg && (
