@@ -1,21 +1,49 @@
-# Virtual environment
+# Virtual environment & Python
 .venv/
 venv/
 ENV/
-
-# Secrets and environment configurations (NEVER commit credentials)
-.env
-*.env
-smart_healthcare_ai_backend/.env
-
-# Python cache & bytecode
 __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
 
-# Backup files
+# Node & Next.js frontend
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+out/
+frontend/out/
+build/
+frontend/build/
+*.tsbuildinfo
+frontend/*.tsbuildinfo
+
+# Secrets & Environment Configurations (NEVER commit real credentials)
+.env
+*.env
+.env*.local
+*.env.local
+frontend/.env
+frontend/.env.local
+frontend/.env*.local
+smart_healthcare_ai_backend/.env
+smart_healthcare_ai_backend/*.env
+!frontend/.env.example
+!smart_healthcare_ai_backend/.env.example
+!.env.example
+
+# Vercel & Deployment
+.vercel/
+frontend/.vercel/
+
+# Logs & Temporary Files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
 *.bak
 
-# macOS artifacts
+# macOS & System Artifacts
 .DS_Store
+*.pem
